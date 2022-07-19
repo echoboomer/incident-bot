@@ -1,10 +1,10 @@
 # incident-bot
 
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/bot.png" width="125" height="125">
+<img src="https://github.com/echoboomer/incident-bot/blob/master/assets/bot.png" width="125" height="125">
 
-Incident management ChatOps bot for Slack to allow your teams to easily and effectively identify and manage technical incidents impacting your cloud infrastructure, your products, or your customers' ability to use your applications and services.
+Incident management ChatOps bot for Slack.
 
-Interacting with the bot is incredibly easy through the use of modals and simplified commands.
+This bot runs using the `slack-bolt` framework and leverages websockets to avoid a requirement for public inbound access.
 
 - [incident-bot](#incident-bot)
   - [Architecture](#architecture)
@@ -12,28 +12,32 @@ Interacting with the bot is incredibly easy through the use of modals and simpli
   - [Features](#features)
     - [Incident Management](#incident-management)
       - [Incident Management Module Requirements](#incident-management-module-requirements)
-      - [Auto RCA/Postmortem Generation](#auto-rcapostmortem-generation)
-      - [Scheduled Actions](#scheduled-actions)
+      - [Incident Management Features](#incident-management-features)
+        - [Automatically inviting specific members to the channel every time an incident is started.](#automatically-inviting-specific-members-to-the-channel-every-time-an-incident-is-started)
+        - [Automatically posting information regarding external providers](#automatically-posting-information-regarding-external-providers)
+        - [Automatically creating an incident via a react](#automatically-creating-an-incident-via-a-react)
+      - [Statuspage Integration](#statuspage-integration)
+    - [Web Interface](#web-interface)
   - [Updating Literature](#updating-literature)
   - [Required Variables](#required-variables)
   - [Optional Variables](#optional-variables)
   - [Database Migrations](#database-migrations)
   - [Testing](#testing)
-  - [Demonstration](#demonstration)
-  - [Feedback](#feedback)
 
 ## Architecture
 
-The app is written in Python and backed by Postgresql and leverages the `slack-bolt` websockets framework to provide zero footprint for security concerns.
+The app is written in Python and backed by Postgresql.
 
 Each incident stores unique data referenced by processes throughout the app for lifecycle management on creation. The database should be durable and connection information should be passed to the application securely. In the event that a record is lost while an incident is open, the bot will be unable to manage that incident and none of the commands will work.
 
+If you plan on allowing users to reopen incidents by setting their status back to anything other than `Resolved`, you will need to keep these records intact as well.
+
 ## Requirements
 
-- [Create a Slack app](https://api.slack.com/apps?new_app=1) for this application. You can name it whatever you'd like, but `incident-bot` seems to make the most sense.
-- Use the option to create the app from a manifest. Run `make render` to output `slack_app_manifest.yaml` at project root and paste in the contents. You can adjust these settings later as you see fit, but these are the minimum permissions required for the bot to function properly.
+- [Create a Slack app](https://api.slack.com/apps?new_app=1) for this application. Call it whatever you want.
+- Use the option to create the app from a manifest. Run `make render` to output `slack_app_manifest.yaml` at project root and paste in the contents.
 - Install the app to your workspace. You'll now have an OAuth token. Provide that as `SLACK_BOT_TOKEN`.
-- Verify that websocket mode is enabled and provide the generated app token as `SLACK_APP_TOKEN` - you can generate an app token via the `Basic Information` page in your app's configuration.
+- Verify that websocket mode is enabled and provide the generated app token as `SLACK_APP_TOKEN`. You need both this and the previous token.
 
 ## Features
 
@@ -47,14 +51,6 @@ Each incident stores unique data referenced by processes throughout the app for 
 - A fully functioning digest channel that stays up to date with incident statuses that can be used by others to watch the status of incidents.
 - Optional features documented below.
 
-All incidents start as `sev4`. Incidents may be promoted through to `sev1`. Each time the `status` or `severity` of an incident is changed, an update is sent to the incident channel. The digest message is also updated. When an incident is resolved, the digest message will be changed to show this.
-
-You are also able to send out incident updates so that those who are not actively participating in an incident can stay informed regarding its status. These updates will appear in the incident's digest channel.
-
-When someone claims or is assigned a role during an incident, the bot will notify them via private message and automatically add them to the channel. The bot will also give them helpful information about the role they've been assigned. You are free to adjust these messages as you see fit.
-
-When an incident is marked as `resolved`, a separate RCA channel is created for users to collaborate on scheduling followup actions. The `incident commander` and `technical lead` roles are automatically invited to this channel and may invite others as needed.
-
 #### Incident Management Module Requirements
 
 Since this bot mainly helps run incidents, there are a few prerequisites.
@@ -63,27 +59,56 @@ Since this bot mainly helps run incidents, there are a few prerequisites.
 - Your Slack workspace name (`foobar.slack.com`) minus the domain (`foobar`) should be provided as `SLACK_WORKSPACE_ID`. This is used to format some things related to sending messages to Slack.
 - You should invite your bot user to the aforementioned incidents digest channel at a minimum as well as anywhere else you'd like to use it. If you'd like to enable the react-to-create feature, the bot will need to be in every channel you plan to use this in. Common places are alert channels, etc.
 
-#### Auto RCA/Postmortem Generation
+#### Incident Management Features
 
-This feature only works with Confluence Cloud and requires an API token and username as well as other variables described below. The template for the generated RCA is provided as an `html` file located at `templates/confluence/rca.html`. While a base template is provided, it is up to you to provide the rest. It is beyond the scope of this application to dictate the styles used in your documentation. One thing to keep in mind is that components provided should use unique `uuids`.
+There are two optional features with the incident management module:
 
-#### Scheduled Actions
+##### Automatically inviting specific members to the channel every time an incident is started.
 
-By default, the app will look for incidents that are not `resolved` that are older than `7` days. You may adjust this behavior via the `scheduler` module if you wish.
+Set the OS environment variable `INCIDENT_AUTO_GROUP_INVITE_ENABLED` to `true`.
 
-When an incident is promoted to `sev1` or `sev2`, a scheduled job will kick off that will look for whether or not the `last_update_sent` field has been updated in the last `30` minutes. If not, it will ping the channel to encourage you to send out an incident update as good practice.
+Set the OS environment variable `INCIDENT_AUTO_GROUP_INVITE_GROUP_NAME` to the name of the Slack group you want to invite to each newly created incident channel.
 
-From then on, a reminder is sent out every `25` minutes to encourage you to send out another update. You may change these timers if you wish. This establishes a pattern that critical incidents will update your internal teams using half-hour cadences.
+##### Automatically posting information regarding external providers
+
+This feature currently supports the following providers, but you can write your own using the existing logic:
+
+- Auth0
+- GitHub
+
+To enable, set `INCIDENT_EXTERNAL_PROVIDERS_ENABLED` to `true` and set `INCIDENT_EXTERNAL_PROVIDERS_LIST` to a comma-separated list of providers you'd like to enable. Example: `auth0,github`
+
+By enabling this feature, a message will be dropped into each new incident channel for each provider that recaps, by default, all incidents in the last 5 days. There is a refresh button that will fetch status again and repost the message. This is handy when a provider is experiencing an incident but hasn't updated their status page yet.
+
+##### Automatically creating an incident via a react
+
+If setting `INCIDENT_AUTO_CREATE_FROM_REACT_ENABLED` to `true` and `INCIDENT_AUTO_CREATE_FROM_REACT_EMOJI_NAME` to the name of a Slack emoji, you can automatically have an incident create based on reacting to a message. The bot will create the channel with the suffix `auto-<random 6 char hashed value>` and will paste the contents of the message that was reacted to in the incident channel.
+
+#### Statuspage Integration
+
+If enabling the variable to set the Statuspage integration to enabled (see below) and providing the API key and page ID for your Statuspage account, the bot will drop in a message after the incident is opened that will allow you to create a corresponding Statuspage incident. In a future update, this process will be automated and tied to stages managed by the bot.
+
+For now, you can kick off a new incident by providing a title, description, impact, and by selecting impacted components. You can then move the Statuspage incident through phases until is resolved. Each time you do this, the message will automatically update in your incident channel.
+
+### Web Interface
+
+The application includes a web interface with user management features that can optionally be enabled by setting `WEB_INTERFACE_ENABLED` to `true`. If enabled, the interface is accessible at `/admin`. You also need to set `FLASK_APP_SECRET_KEY` to a secret string of your choosing.
+
+You will most likely want to edit the templates at `templates/webapp` to customize what options you may want available. You can set the bot name and other default parameters for the web interface within `lib/core/webapp.py` using the `@app.context_processor` section.
+
+A default admin account is created with the username `admin@admin.com` and password `admin` when the app is first started. You should login using these credentials, access the admin panel, create your own users, and then disable the admin account. As long as the admin account is disabled, it will not be recreated.
+
+If you wish to allow users to sign up for their own (non-admin) accounts, you can set `signups_enabled=True` in `lib/core/webapp.py` which will enable the route and the sign up button in the UI.
+
+You can customize the HTML templates files to adjust the roles that users can be assigned, etc. This is all up to you.
 
 ## Updating Literature
 
-You can change the definitions of severity levels and the incident roles via the `templates/slack/` directory - whatever changes you make to the `json` files will impact the messaging the application uses when advertising information about severity levels, role responsibilities, etc.
-
-You are encouraged to update these - it is beyond the scope of this application to determine the definitions and the provided ones are there as examples. It is common to work with customer experience or legal teams for defining these.
+You can change the definitions of severity levels and the incident roles via the `templates/` directory - whatever changes you make to the `json` files will impact the messaging the application uses when advertising information about severity levels, role responsibilities, etc.
 
 ## Required Variables
 
-- `POSTGRES_HOST` - the hostname of the database.
+- `POSTGRES_WRITER_HOST` - the hostname of the database.
 - `POSTGRES_NAME` - database name to use.
 - `POSTGRES_USER` - database user to use.
 - `POSTGRES_PASSWORD` - password for the user.
@@ -91,10 +116,12 @@ You are encouraged to update these - it is beyond the scope of this application 
 - `INCIDENTS_DIGEST_CHANNEL` - the **name** of the incidents digest channel as described above.
 - `INCIDENT_GUIDE_LINK` - a link to your internal guide for handling incidents. **Note:** This must be a fully formed URL - example: `https://mylink.com`.
 - `INCIDENT_POSTMORTEMS_LINK` - a link to your postmortem process documentation or postmortem collection. **Note:** This must be a fully formed URL - example: `https://mylink.com`.
-- `INCIDENT_CHANNEL_TOPIC` - the topic that will be set for all new incident channels. This is useful as a place to store a video meeting link.
-- `SLACK_APP_TOKEN` - the app-level token for enabling websocket communication.
+- `INCIDENT_CHANNEL_TOPIC` - the topic that will be set for all new incident channels.
 - `SLACK_BOT_TOKEN` - the API token to be used by your bot once it is deployed to your workspace.
+- `SLACK_APP_TOKEN` - the app-level token for enabling websocket communication.
 - `SLACK_WORKSPACE_ID` - if your Slack workspace is `mycompany.slack.com`, this should be `mycompany`.
+- `PAGERDUTY_API_TOKEN` - an API token for PagerDuty to enable on-call information parsing and paging.
+- `PAGERDUTY_API_USERNAME` - the username associated with the PagerDuty API token.
 
 ## Optional Variables
 
@@ -110,29 +137,22 @@ You are encouraged to update these - it is beyond the scope of this application 
 - `STATUSPAGE_PAGE_ID` - Statuspage page ID if enabling.
 - `STATUSPAGE_URL` - Link to the public Statuspage for your organization. **Note:** This must be a fully formed URL - example: `https://status.foo.com`.
 - `TEMPLATES_DIRECTORY` - set this to the directory your templates will be located in from the project root if you want to override the default of `templates/slack/`. You do not need to provide this otherwise. If you do, you must include the trailing `/` - i.e. `mydirfortemplates/`
-- `WEB_INTERFACE_ENABLED` - set this to `true` to enable the optional web management interface. **Note:** The web interface is deprecated and will be removed in a future version.
+- `WEB_INTERFACE_ENABLED` - set this to `true` to enable the optional web management interface.
 
 It is also possible to automatically create an RCA/postmortem document when an incident is transitioned to resolved.
 
-- `AUTO_CREATE_RCA` - Set this to `true` to enable RCA creation - this only works with Confluence Cloud. When enabled, this will automatically populate a postmortem document. If this is `true`, you must provide all values below.
+- `AUTO_CREATE_RCA` - Set this to `true` to enable RCA creation. If this is `true`, you must provide all values below.
 - `CONFLUENCE_API_URL` - The URL of the Atlassian account.
 - `CONFLUENCE_API_USERNAME` - Username that owns the API token.
 - `CONFLUENCE_API_TOKEN` - The API token.
 - `CONFLUENCE_SPACE` - The space in which the RCAs page lives.
 - `CONFLUENCE_PARENT_PAGE` - The name of the page within the above space where RCAs are created as child objects.
 
-Finally, you can integrate with PagerDuty to provide details about who is on call. To do so, provide the following variables. If either of these is blank, the feature will not be enabled.
-
-- `PAGERDUTY_API_TOKEN`
-- `PAGERDUTY_API_USERNAME`
-
-You are then able to use the bot's `pager` command.
-
 ## Database Migrations
 
 Migrations can be done using [Alembic](https://github.com/sqlalchemy/alembic). This process uses `config.database_url` so it depends on the same environment variables the main application does for the database. You will need to have a functioning `.env` file configured locally and this process must be done from your local machine for authorized users.
 
-**Note:** The `.env` file is ignored via `.gitignore` - do not commit any sensitive information to your repository when running migrations locally.
+**Note:** The `.env` file is ignored via `.gitignore` - do not commit any sensitive information to this repository when running migrations locally.
 
 To stage a migration file:
 
@@ -155,8 +175,6 @@ INFO  [alembic.runtime.migration] Running upgrade e585abb1f948 -> 476b2348392c, 
 
 Past migrations can be viewed in the `alembic/` directory for reference and context. Don't delete them as they can be used for downgrading/rolling back.
 
-It is possible you'll never need to use this functionality, but if you choose to add new columns to the database, it will come in handy.
-
 ## Testing
 
 Tests will run on each pull request and merge to the primary branch. To run them locally:
@@ -164,57 +182,3 @@ Tests will run on each pull request and merge to the primary branch. To run them
 ```bash
 $ make run-tests
 ```
-
-## Demonstration
-
-Search for the `start a new incident` shortcut via the Slack search bar and click on it:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/start-search.png">
-
-Provide a short description and start a new incident:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/start-modal.png">
-
-The digest channel shows that a new incident has been started:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/digest-new.png">
-
-Upon joining the incident channel, the control panel is show where changes can be made to `status`, `severity`, and `roles`:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/boilerplate.png">
-
-As `status`, `severity`, and `roles` are changed, the channel is notified of these events:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/updates.png">
-
-Periodically, you can choose to provide those not involved directly in the incident about updates by searching for the `provide incident update` shortcut via the Slack search bar and clicking on it:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/provide-update-search.png">
-
-You can then provide details regarding components and the nature of the update after selecting the incident channel. Only open incidents will show up in the list:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/provide-update-modal.png">
-
-Now, everyone can see the updates in the digest channel without needing to join the incident:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/provide-update-message.png">
-
-When an incident is promoted to `sev2` or `sev1`, the scheduled reminder to send out updates will be created. You can view these by using `scheduler list`:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/sev2-scheduler.png">
-
-When an incident has reached its conclusion and has been resolved, a helpful message is sent to the incident channel - notice that there is a handy button to export a formatted chat history to attach to your postmortem:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/resolution-message.png">
-
-The original message in the digest channel is changed to reflect the new status of the incident:
-
-<img src="https://github.com/echoboomer/incident-bot/blob/main/assets/examples/resolution-digest-update.png">
-
-This is only a simple explanation of the process for running an incident. There are plenty of features that will guide your teams along the way.
-
-## Feedback
-
-This application is not meant to solve every problem with regard to incident management. It was created as an open-source alternative to paid solutions that integrate with Slack.
-
-If you encounter issues with functionality or wish to see new features, please open an issue and let us know.

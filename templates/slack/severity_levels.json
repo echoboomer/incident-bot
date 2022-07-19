@@ -1,6 +1,0 @@
-{
-  "sev1": "This signifies a critical production scenario with significant degradation to user experience and application features.",
-  "sev2": "This signifies a major production degradation scenario.",
-  "sev3": "This signifies a minor production scenario.",
-  "sev4": "This signifies an ongoing investigation."
-}

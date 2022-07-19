@@ -1,0 +1,201 @@
+<table data-layout="default" ac:local-id="5169d0ee-8730-498e-926c-90449c5ed692">
+  <colgroup>
+    <col style="width: 340.0px;" />
+    <col style="width: 340.0px;" />
+  </colgroup>
+  <tbody>
+    <tr>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Role</strong></p>
+      </td>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Individuals</strong></p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Incident Commander</p>
+      </td>
+      <td>
+        {incident_commander}
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Technical Lead</p>
+      </td>
+      <td>
+        {technical_lead}
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Participants</p>
+      </td>
+      <td>
+        <p>Tag other people that participated in the resolution of the incident here.</p>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Summary</h2>
+
+<ac:structured-macro ac:name="info" ac:schema-version="1" ac:macro-id="2a5b6310-4353-34cb-20ff-v342ed33ab2a">
+  <ac:rich-text-body>
+    <p>This incident was classified as a <b>{severity}</b> incident.</p>
+    <p>{severity_definition}</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="4a5a6210-4358-44cb-90ef-e382ee93ab1a">
+  <ac:rich-text-body>
+    <p>A brief explanation of what happened and how this affected the overall healthiness of the system</p>
+    <p><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>User Impact</h2>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="4166bb92-02e0-4ec1-8f58-fc64339d8816">
+  <ac:rich-text-body>
+    <p>Describe how this incident affected users. Summarize answers to these two questions:</p>
+    <ul>
+      <li>
+        <p>Was the service from the point of view of the user running in a degraded state?</p>
+      </li>
+      <li>
+        <p>Were the endpoints/devices that agents are connecting to backend through in a degraded state?</p>
+      </li>
+    </ul>
+    <p>Full details can be added to the incident description.</p>
+    <p><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>Timestamps</h1>
+<table data-layout="default" ac:local-id="37e18040-e761-441f-8541-29a8e60e54c2">
+  <colgroup>
+    <col style="width: 340.0px;" />
+    <col style="width: 340.0px;" />
+  </colgroup>
+  <tbody>
+    <tr>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Time</strong></p>
+      </td>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Event</strong></p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>07:00 PST / 15:00 UTC</p>
+      </td>
+      <td>
+        <p>Release was deployed</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>07:30 PST / 15:30 UTC</p>
+      </td>
+      <td>
+        <p>We started observing increased latencies</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>&hellip;</p>
+      </td>
+      <td>
+        <p>&hellip;</p>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>Response Time</h1>
+<table data-layout="wide" ac:local-id="664e5c33-1c55-420a-8c9e-64c19c799001">
+  <colgroup>
+    <col style="width: 226.67px;" />
+    <col style="width: 226.67px;" />
+    <col style="width: 226.67px;" />
+  </colgroup>
+  <tbody>
+    <tr>
+      <td data-highlight-colour="#f4f5f7">
+        <p />
+      </td>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Time</strong></p>
+      </td>
+      <td data-highlight-colour="#f4f5f7">
+        <p><strong>Notes</strong></p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Time to detection (from when the incident happened until we realized)</p>
+      </td>
+      <td>
+        <p>X Minutes</p>
+      </td>
+      <td>
+        <p>Was spotted manually by infra</p>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <p>Time to resolution (when the incident was totally solved)</p>
+      </td>
+      <td>
+        <p />
+      </td>
+      <td>
+        <p />
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>Incident Description</h1>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="0fc25083-fbe3-442d-af1a-f823b895a496">
+  <ac:rich-text-body>
+    <p>Longer description of the problem with screenshots/links to help readers understand the entire incident.</p>
+    <p><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>Root Cause</h1>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="76e895fa-3a61-48c9-9e0c-4eabd2b15e8b">
+  <ac:rich-text-body>
+    <p>Explain the root cause of the issue and what other side effects it had.</p>
+    <p><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h1>Actions</h1>
+
+<h2>Immediate Actions</h2>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="dcc66da8-60df-4c73-9078-f2b27981a1d5">
+  <ac:rich-text-body>
+    <p>Actions to mitigate the incident should be listed here.</p>
+    <p>[With links to tickets]<br /><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>Preventive Actions</h2>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="ed075733-c653-49d6-91a2-a968b0d0a56e">
+  <ac:rich-text-body>
+    <p>Actions that should be implemented to avoid this scenario in the future.</p>
+    <p>[With links to tickets]<br /><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>Strategic Actions</h2>
+<ac:structured-macro ac:name="note" ac:schema-version="1" ac:macro-id="9377339e-8699-4688-a5e5-70219bf5d1dc">
+  <ac:rich-text-body>
+    <p>Takeaways or long term actions that would make a difference on incidents of this kind.</p>
+    <p>[With links to tickets]<br /><strong>[delete info panel when done]</strong></p>
+  </ac:rich-text-body>
+</ac:structured-macro>

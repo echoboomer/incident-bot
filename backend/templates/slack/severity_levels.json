@@ -1,0 +1,6 @@
+{
+  "sev1": "This signifies a critical production scenario that impacts most or all users with a major impact on SLAs. This is an all-hands-on-deck scenario that requires swift action to restore operation. Customers must be notified.",
+  "sev2": "This signifies a significant production degradation scenario impacting a large portion of users.  We may choose to notify customers.",
+  "sev3": "This signifies a minor production scenario that may or may not result in degradation. This situation is worth coordination to resolve quickly but does not indicate a critical loss of service for users.",
+  "sev4": "This signifies an ongoing investigation. This incident has not been promoted to SEV3 yet, indicating there may be little to no impact, but the situation warrants a closer look. This is diagnostic in nature. This is the default setting for a new incident."
+}

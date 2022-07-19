@@ -29,6 +29,10 @@ function renderManifest {
     "        type: global" \
     "        callback_id: open_incident_modal" \
     "        description: Creates a new incident." \
+    "      - name: Incident Bot Pager" \
+    "        type: global" \
+    "        callback_id: open_incident_bot_pager" \
+    "        description: Allows you to page a team in PagerDuty when running incidents via Incident Bot." \
     "oauth_config:" \
     "  scopes:" \
     "    bot:" \
