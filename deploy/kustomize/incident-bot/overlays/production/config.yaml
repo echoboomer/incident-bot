@@ -32,6 +32,8 @@ integrations:
     parent: Postmortems
   zoom:
     auto_create_meeting: false
+  google_meet:
+    auto_create_meeting: false
 links:
   incident_guide: https://changeme.com
   incident_postmortems: https://changeme.com

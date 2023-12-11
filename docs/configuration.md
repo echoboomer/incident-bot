@@ -31,6 +31,7 @@ Lastly, you can also adjust integrations:
 - PagerDuty
 - Statuspage
 - Zoom
+- Google Meet
 
 Here is the standard layout of the file:
 
@@ -122,6 +123,10 @@ Here is the standard layout of the file:
       # Enable Zoom integration
     zoom:
       # Set to true to automatically generate a Zoom meeting for each incident
+      auto_create_meeting: false
+      # Enable Google Meet integration
+    google_meet:
+      # Set to true to automatically generate a Google Meet meeting for each incident
       auto_create_meeting: false
   links:
     incident_guide: https://changeme.com

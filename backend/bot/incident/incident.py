@@ -228,6 +228,13 @@ class Incident:
             )
         ):
             return ZoomMeeting().url
+        elif (
+            "google_meet" in config.active.integrations
+            and config.active.integrations.get("google_meet").get(
+                "auto_create_meeting"
+            )
+        ):
+            return GoogleMeetMeeting().url
         else:
             return config.active.options.get("conference_bridge_link")
 

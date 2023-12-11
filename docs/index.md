@@ -16,7 +16,7 @@ Need support or just want to chat with us? Join us on [Discord](https://discord.
 - A fully functioning digest channel that stays up to date with incident statuses that can be used by others to watch the status of incidents. Incident statuses are updated there in real time.
 - Define your own roles, severities, and statuses. There are some provided out of the box, but you can control them.
 - The ability to send out internal status updates that will be viewable in the incident digest channel.
-- Automatically generate unique Zoom meetings for each incident and tell everyone about them.
+- Automatically generate unique Zoom or Google Meet meetings for each incident and tell everyone about them.
 - Create Statuspage incidents.
 - Page teams in PagerDuty.
 - Automatically create an RCA/postmortem document in Confluence.
