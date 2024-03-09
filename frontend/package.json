@@ -15,7 +15,7 @@
     "@testing-library/jest-dom": "^6.2.0",
     "@testing-library/react": "^14.0.0",
     "@testing-library/user-event": "^14.4.3",
-    "@uiw/react-textarea-code-editor": "^2.1.9",
+    "@uiw/react-textarea-code-editor": "^3.0.2",
     "axios": "^1.4.0",
     "bootstrap": "^5.3.2",
     "buffer": "^6.0.3",
