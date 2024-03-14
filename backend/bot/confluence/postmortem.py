@@ -1,31 +1,47 @@
+import datetime
+import uuid
+from bot.shared.tools import parse_timestamp
 import config
+from bot.slack.client import get_slack_user, slack_workspace_id
 
 from bot.confluence.api import ConfluenceApi, logger
 from bot.models.pg import IncidentLogging
-from bot.templates.confluence.postmortem import PostmortemTemplate
+from bot.templates.confluence.postmortem import (
+    PostmortemContext,
+    PostmortemTemplate,
+)
+from bot.exc import PostmortemException
 from html import escape
 from iblog import logger
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
 class IncidentPostmortem:
     def __init__(
         self,
         incident_id: str,
-        postmortem_title: str,
-        incident_commander: str,
+        incident_created_at: str,
+        incident_description: str,
         severity: str,
+        channel_id: str,
+        channel_name: str,
         severity_definition: str,
-        pinned_items: List[IncidentLogging],
-        timeline: List[Dict],
-    ):
+        pinned_items: list[IncidentLogging],
+        timeline: list[dict],
+        roles: dict | None = None,
+        confluence: ConfluenceApi | None = None,
+    ) -> None:
         self.incident_id = incident_id
-        self.title = postmortem_title
-        self.incident_commander = incident_commander
+        self.incident_datetime = parse_timestamp(incident_created_at)
+        self.incident_description = incident_description
         self.severity = severity
         self.severity_definition = severity_definition
         self.pinned_items = pinned_items
         self.timeline = timeline
+        self.roles = roles or {}
+        self.incident_commander = self.roles.get('incident_commander', 'Unknown')
+        self.channel_id = channel_id
+        self.channel_name = channel_name
 
         self.parent_page = (
             config.active.integrations.get("atlassian")
@@ -38,7 +54,7 @@ class IncidentPostmortem:
             .get("space")
         )
 
-        self.confluence = ConfluenceApi()
+        self.confluence = confluence or ConfluenceApi()
         self.exec = self.confluence.api
 
     def create(self) -> str:
@@ -47,85 +63,71 @@ class IncidentPostmortem:
         """
         parent_page_id = self.exec.get_page_id(self.space, self.parent_page)
         logger.info(
-            f"Creating postmortem {self.title} in Confluence space {self.space} under parent {self.parent_page}..."
+            f"Creating postmortem {self.incident_id} in Confluence space {self.space} under parent {self.parent_page}..."
         )
         # Generate html for postmortem doc
-        body = self.__render_postmortem_html(
-            incident_commander=self.incident_commander,
-            severity=self.severity,
-            severity_definition=self.severity_definition,
-            timeline=self.__generate_timeline(),
-            pinned_messages=self.__generate_pinned_messages(),
-        )
         # Create postmortem doc
-        if self.exec.page_exists(space=self.space, title=self.parent_page):
-            try:
-                self.exec.create_page(
-                    self.space,
-                    self.title,
-                    body,
-                    parent_id=parent_page_id,
-                    type="page",
-                    representation="storage",
-                    editor="v2",
-                )
-                created_page_id = self.exec.get_page_id(self.space, self.title)
-                created_page_info = self.exec.get_page_by_id(
-                    page_id=created_page_id
-                )
-                url = (
-                    created_page_info["_links"]["base"]
-                    + created_page_info["_links"]["webui"]
-                )
-                # If there are images in pinned items
-                # Add them as attachments
-                if self.pinned_items:
-                    for item in self.pinned_items:
-                        if item.img:
-                            try:
-                                logger.info(
-                                    f"Attaching pinned item image to {self.title}..."
-                                )
-                                # Attach content to postmortem document
-                                self.exec.attach_content(
-                                    item.img,
-                                    name=item.title,
-                                    content_type=item.mimetype,
-                                    page_id=created_page_id,
-                                    space=config.active.integrations.get(
-                                        "atlassian"
-                                    )
-                                    .get("confluence")
-                                    .get("space"),
-                                    comment=f"This item was pinned to the incident by {item.user} at {item.ts}.",
-                                )
-                            except Exception as error:
-                                logger.error(
-                                    f"Error attaching file to {self.title}: {error}"
-                                )
-                return url
-            except Exception as error:
-                logger.error(error)
-        else:
-            logger.error(
+        if not self.exec.page_exists(space=self.space, title=self.parent_page):
+            msg = (
                 "Couldn't create postmortem page, does the parent page exist?"
             )
-
-    def __find_user_id(self, user: str) -> Tuple[bool, Any]:
-        """
-        Accepts the publicName of a user in Atlassian Cloud and returns the ID if it exists
-        """
-        groups = self.exec.get_all_groups(start=0, limit=50)
-        for g in groups:
-            users = self.exec.get_group_members(
-                group_name=g["name"], start=0, limit=1000
+            logger.error(msg)
+            raise PostmortemException(msg)
+        try:
+            context = self._generate_incident_context()
+            title = self.__render_postmortem_title(context)
+            body = self.__render_postmortem_html(
+                context=context,
             )
-            for u in users:
-                if user in u["publicName"]:
-                    return True, u["accountId"]
-                else:
-                    pass
-        return False, None
+            self.confluence.create_page(
+                space=self.space,
+                title=title,
+                body=body,
+                parent_id=parent_page_id,
+                type="page",
+                representation="storage",
+                editor="v2",
+                labels=["postmortem"],
+            )
+            created_page_id = self.exec.get_page_id(self.space, title)
+            created_page_info = self.exec.get_page_by_id(
+                page_id=created_page_id
+            )
+            url = (
+                created_page_info["_links"]["base"]
+                + created_page_info["_links"]["webui"]
+            )
+            # If there are images in pinned items
+            # Add them as attachments
+            if self.pinned_items:
+                for item in self.pinned_items:
+                    if item.img:
+                        try:
+                            logger.info(
+                                f"Attaching pinned item image to {title}..."
+                            )
+                            # Attach content to postmortem document
+                            self.exec.attach_content(
+                                item.img,
+                                name=item.title,
+                                content_type=item.mimetype,
+                                page_id=created_page_id,
+                                space=config.active.integrations.get(
+                                    "atlassian"
+                                )
+                                .get("confluence")
+                                .get("space"),
+                                comment=f"This item was pinned to the incident by {item.user} at {item.ts}.",
+                            )
+                        except Exception as error:
+                            logger.error(
+                                f"Error attaching file to {title}: {error}"
+                            )
+            return url
+        except Exception as error:
+            msg = "Something unexpected happened and we couldn't create the postmortem."
+            logger.exception(msg)
+            raise PostmortemException(msg) from error
 
     def __generate_pinned_messages(self) -> str:
         if not self.pinned_items:
@@ -144,7 +146,7 @@ class IncidentPostmortem:
             return """
     <tr>
         <td>
-            <p>None.</p>
+            <p></p>
         </td>
         <td>
             <p>No items were added to this incident's timeline.</p>
@@ -179,22 +181,118 @@ class IncidentPostmortem:
 
     def __render_postmortem_html(
         self,
-        incident_commander: str,
-        severity: str,
-        severity_definition: str,
-        timeline: str,
-        pinned_messages: str,
+        context: PostmortemContext,
     ) -> str:
         """Renders HTML for use in Confluence documents"""
+        template_id = (
+            config.active.integrations.get("atlassian")
+            .get("confluence")
+            .get("postmortem_template_id")
+        )
+        template_body = (
+            self.confluence.fetch_template(template_id)['body']
+            if template_id
+            else None
+        )
         try:
             return PostmortemTemplate.template(
-                incident_commander=incident_commander,
-                severity=severity,
-                severity_definition=severity_definition,
-                timeline=timeline,
-                pinned_messages=pinned_messages,
+                context=context,
+                template_body=template_body,
             )
         except Exception as error:
-            logger.error(
-                f"Error generating Confluence postmortem html: {error}"
+            msg = f"Error generating Confluence postmortem html: {error}"
+            logger.error(msg)
+            raise PostmortemException(msg) from error
+
+    def __render_postmortem_title(
+        self,
+        context: PostmortemContext,
+    ) -> str:
+        """Renders HTML for use in Confluence documents"""
+        template_id = (
+            config.active.integrations.get("atlassian")
+            .get("confluence")
+            .get("postmortem_template_id")
+        )
+        if template_id:
+            template_response = (
+                self.confluence.fetch_template(template_id)
             )
+            if template_response:
+                template_title = template_response["name"]
+        else:
+            template_title = config.active.integrations.get("atlassian").get("confluence").get("postmortem_title")
+
+        if not template_title:
+            # defaulting to %Y-%m-%d - {incident_id}
+            template_title = "{incident_date} - {incident_id}"
+
+        for k, v in context.items():
+            if v is not None:
+                template_title = template_title.replace(f"{{{k}}}", str(v))
+        return template_title
+
+    def __generate_roles(self) -> str:
+        html = ""
+        if self.roles:
+            for role, user in self.roles.items():
+                confluence_user = self.convert_slack_name_to_confluence_html(user)
+                html += f"<b>{role}</b>: {confluence_user} <br />"
+        return html
+
+    def convert_slack_name_to_confluence_html(self, user_name: str) -> str:
+        """Converts a Slack username to a Confluence username reference"""
+        user = get_slack_user(user_name)
+        if user:
+            user['email'] = 'chudood@gmail.com'
+            confluence_account_id = self.confluence.get_user_id(name=user['real_name'], email=user['email'])
+            if confluence_account_id:
+                return f'<ac:link><ri:user ri:account-id="{confluence_account_id}"/></ac:link>'
+            else:
+                return f"{user['real_name']}"
+        else:
+            return user_name
+
+    def _generate_incident_context(self) -> PostmortemContext:
+        channel_link =  f'<b><a href="https://{slack_workspace_id}.slack.com/archives/{self.channel_id}">#{self.channel_name}</a></b>'
+
+        incident_commander=self.convert_slack_name_to_confluence_html(self.incident_commander)
+        print(incident_commander)
+
+        context = PostmortemContext(
+            incident_commander=incident_commander,
+            severity=self.severity,
+            severity_definition=self.severity_definition,
+            timeline_table_html=self.__generate_timeline_table_html(),
+            pinned_messages_html=self.__generate_pinned_messages(),
+            incident_id=self.incident_id,
+            # TODO: This should be whoever clicked the button to create the postmortem
+            description=self.incident_description,
+            author=incident_commander,
+            postmortem_date=datetime.datetime.now().strftime("%Y-%m-%d"),
+            roles_html=self.__generate_roles(),
+            incident_date=self.incident_datetime.strftime("%Y-%m-%d"),
+            channel_link=channel_link
+        )
+        return context
+
+    def __generate_timeline_table_html(self) -> str:
+        return f"""
+        <table data-layout="default" ac:local-id="{uuid.uuid4()}">
+        <colgroup>
+            <col style="width: 340.0px;" />
+            <col style="width: 340.0px;" />
+        </colgroup>
+        <tbody>
+            <tr>
+            <td data-highlight-colour="#f4f5f7">
+                <p><strong>Time</strong></p>
+            </td>
+            <td data-highlight-colour="#f4f5f7">
+                <p><strong>Event</strong></p>
+            </td>
+            </tr>
+            {self.__generate_timeline()}
+        </tbody>
+        </table>
+        """

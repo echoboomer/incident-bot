@@ -229,6 +229,11 @@ class Configuration:
                                         "type": "string",
                                         "empty": False,
                                     },
+                                    "postmortem_template_id": {
+                                        "required": False,
+                                        "type": "integer",
+                                        "empty": False,
+                                    }
                                 },
                             },
                             "jira": {
@@ -605,7 +610,7 @@ Core functionality:
     Slack workspace:                    {workspace}
     Logging level:                      {log_level}
 
-Integrations Configuration:                           
+Integrations Configuration:
 {json.dumps(active.integrations, sort_keys=True, indent=4)}
 --------------------------------------------------------------------------------
     """

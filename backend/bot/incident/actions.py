@@ -1,8 +1,9 @@
+from bot.incident.incident import Incident
 import config
 import slack_sdk.errors
 
 from bot.audit import log
-from bot.exc import IndexNotFoundError
+from bot.exc import IndexNotFoundError, PostmortemException
 from bot.incident.action_parameters import (
     ActionParametersSlack,
     ActionParametersWeb,
@@ -15,6 +16,7 @@ from bot.models.incident import (
     db_update_incident_severity_col,
     db_update_incident_updated_at_col,
 )
+from bot.models.pg import Incident as IncidentModel
 from bot.scheduler import scheduler
 from bot.shared import tools
 from bot.slack.client import (
@@ -394,18 +396,7 @@ async def set_status(
             else:
                 actual_user_names.append("Unassigned")
 
-        # Format postmortem message to incident channel
-        postmortem_boilerplate_message_blocks = [
-            {"type": "divider"},
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": ":white_check_mark: Incident Postmortem",
-                },
-            },
-        ]
-
+        postmortem_link = None
         # Generate postmortem template and create postmortem if enabled
         # Get normalized description as postmortem title
         if "atlassian" in config.active.integrations:
@@ -414,83 +405,9 @@ async def set_status(
                 .get("confluence")
                 .get("auto_create_postmortem")
             ):
-                from bot.confluence.postmortem import IncidentPostmortem
-
-                postmortem_title = f"{datetime.today().strftime('%Y-%m-%d')} - {incident_data.incident_id}"
-
-                postmortem = IncidentPostmortem(
-                    incident_id=incident_data.incident_id,
-                    postmortem_title=postmortem_title,
-                    incident_commander=actual_user_names[0],
-                    severity=incident_data.severity,
-                    severity_definition=config.active.severities[
-                        incident_data.severity
-                    ],
-                    pinned_items=read_incident_pinned_items(
-                        incident_id=incident_data.incident_id
-                    ),
-                    timeline=log.read(incident_id=incident_data.incident_id),
+                postmortem_link = await create_post_mortem_block(
+                    incident_data
                 )
-                postmortem_link = postmortem.create()
-                db_update_incident_postmortem_col(
-                    channel_id=incident_data.channel_id,
-                    postmortem=postmortem_link,
-                )
-                # Write audit log
-                log.write(
-                    incident_id=incident_data.incident_id,
-                    event=f"Postmortem was automatically created: {postmortem_link}",
-                ),
-                postmortem_boilerplate_message_blocks.extend(
-                    [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "*I have created a base postmortem document that"
-                                " you can build on. You can open it using the button below.*",
-                            },
-                        },
-                        {
-                            "block_id": "buttons",
-                            "type": "actions",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "View Postmortem In Confluence",
-                                    },
-                                    "style": "primary",
-                                    "url": postmortem_link,
-                                    "action_id": "open_postmortem",
-                                },
-                            ],
-                        },
-                        {"type": "divider"},
-                    ]
-                )
-
-            # Send postmortem message to incident channel
-            try:
-                blocks = postmortem_boilerplate_message_blocks
-                result = slack_web_client.chat_postMessage(
-                    channel=incident_data.channel_id,
-                    blocks=blocks,
-                    text="",
-                )
-                logger.debug(f"\n{result}\n")
-
-                # Pin the postmortem message to the channel for quick access.
-                slack_web_client.pins_add(
-                    channel=incident_data.channel_id,
-                    timestamp=result.get("ts"),
-                )
-            except slack_sdk.errors.SlackApiError as error:
-                logger.error(
-                    f"Error sending postmortem update to incident channel: {error}"
-                )
-
         # Send message to incident channel
         try:
             result = slack_web_client.chat_postMessage(
@@ -673,6 +590,107 @@ async def set_status(
         channel_id=incident_data.channel_id,
         updated_at=tools.fetch_timestamp(),
     )
+
+
+async def create_post_mortem_block(
+    incident_data: IncidentModel,
+) -> str | None:
+    """Generates a postmortem template and creates the postmortem"""
+    from bot.confluence.postmortem import IncidentPostmortem
+
+    # Format postmortem message to incident channel
+    postmortem_boilerplate_message_blocks = [
+        {"type": "divider"},
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": ":white_check_mark: Incident Postmortem",
+            },
+        },
+    ]
+
+
+    try:
+        postmortem = IncidentPostmortem(
+            incident_id=incident_data.incident_id,
+            incident_created_at=incident_data.created_at,
+            incident_description=incident_data.channel_description,
+            severity=incident_data.severity,
+            severity_definition=config.active.severities[
+                incident_data.severity
+            ],
+            channel_id=incident_data.channel_id,
+            channel_name=incident_data.channel_name,
+            pinned_items=read_incident_pinned_items(
+                incident_id=incident_data.incident_id
+            ),
+            timeline=log.read(incident_id=incident_data.incident_id),
+            roles=incident_data.roles,
+        )
+        postmortem_link = postmortem.create()
+
+        db_update_incident_postmortem_col(
+            channel_id=incident_data.channel_id,
+            postmortem=postmortem_link,
+        )
+        # Write audit log
+        log.write(
+            incident_id=incident_data.incident_id,
+            event=f"Postmortem was automatically created: {postmortem_link}",
+        )
+        postmortem_boilerplate_message_blocks.extend(
+            [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*I have created a base postmortem document that"
+                        " you can build on. You can open it using the button below.*",
+                    },
+                },
+                {
+                    "block_id": "buttons",
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "View Postmortem In Confluence",
+                            },
+                            "style": "primary",
+                            "url": postmortem_link,
+                            "action_id": "open_postmortem",
+                        },
+                    ],
+                },
+                {"type": "divider"},
+            ]
+        )
+    except PostmortemException as error:
+        return None
+
+    # Send postmortem message to incident channel
+    try:
+        blocks = postmortem_boilerplate_message_blocks
+        result = slack_web_client.chat_postMessage(
+            channel=incident_data.channel_id,
+            blocks=blocks,
+            text="",
+        )
+        logger.debug(f"\n{result}\n")
+
+        # Pin the postmortem message to the channel for quick access.
+        slack_web_client.pins_add(
+            channel=incident_data.channel_id,
+            timestamp=result.get("ts"),
+        )
+    except slack_sdk.errors.SlackApiError as error:
+        logger.error(
+            f"Error sending postmortem update to incident channel: {error}"
+        )
+    return postmortem_link
 
 
 async def set_severity(

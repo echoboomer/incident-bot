@@ -92,6 +92,8 @@ integrations:
   #   auto_create_postmortem: true
   #   space: ENGINEERIN
   #   parent: Postmortems
+  #   # Set a jira template to use for postmortems.
+  #   postmortem_template_id: 163984
   # Enable Jira integration
   # jira:
   #   project: 'IN'

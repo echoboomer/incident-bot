@@ -53,6 +53,7 @@ oauth_config:
       - reactions:write
       - usergroups:read
       - users:read
+      - users:read.email
 settings:
   event_subscriptions:
     bot_events:

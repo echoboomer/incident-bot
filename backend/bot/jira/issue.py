@@ -23,7 +23,9 @@ class JiraIssue:
         self.description = description
         self.issue_type = issue_type
         self.labels = (
-            config.active.integrations.get("atlassian").get("jira").get("labels")
+            config.active.integrations.get("atlassian")
+            .get("jira")
+            .get("labels")
         ) + [self.incident_data.channel_name]
         # self.priority = priority
         self.summary = summary
