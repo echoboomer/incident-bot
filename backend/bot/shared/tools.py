@@ -1,4 +1,5 @@
 import config
+import zoneinfo
 import ipaddress
 import itertools
 import random
@@ -6,7 +7,6 @@ import string
 
 from datetime import datetime
 from iblog import logger
-from pytz import timezone
 from typing import Any, List
 
 
@@ -19,18 +19,23 @@ timestamp_fmt_short = "%d/%m/%Y %H:%M:%S %Z"
 application_timezone = config.active.options.get("timezone")
 
 
-def fetch_timestamp(short: bool = False):
+def fetch_timestamp(short: bool = False, timezone: str | None = None) -> str:
     """Return a localized, formatted timestamp using datetime.now()"""
-    now = datetime.now()
-    localized = timezone(application_timezone).localize(now)
+    localized = datetime.now(
+        zoneinfo.ZoneInfo(timezone or application_timezone)
+    )
     if short:
         return localized.strftime(timestamp_fmt_short)
     return localized.strftime(timestamp_fmt)
 
 
-def fetch_timestamp_from_time_obj(t: datetime):
+def fetch_timestamp_from_time_obj(
+    t: datetime, timezone: str | None = None
+) -> str:
     """Return a localized, formatted timestamp using datetime.datetime class"""
-    return timezone(application_timezone).localize(t).strftime(timestamp_fmt)
+    return t.astimezone(
+        zoneinfo.ZoneInfo(timezone or application_timezone)
+    ).strftime(timestamp_fmt)
 
 
 def find_index_in_list(lst: List, key: Any, value: Any):

@@ -1,3 +1,4 @@
+import zoneinfo
 import config
 import datetime
 import slack_sdk
@@ -14,7 +15,6 @@ from bot.slack.client import (
     store_slack_user_list_db,
 )
 from iblog import logger
-from pytz import timezone
 from typing import List
 
 
@@ -26,7 +26,7 @@ class TaskScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler(
             jobstores=jobstores,
-            timezone=timezone(application_timezone),
+            timezone=zoneinfo.ZoneInfo(application_timezone),
         )
 
     def list_jobs(self) -> List[Job]:
