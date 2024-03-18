@@ -1,5 +1,5 @@
 alembic==1.13.1
-apispec==6.5.0
+apispec==6.6.0
 apscheduler==3.10.4
 atlassian-python-api==3.41.11
 cerberus==1.3.5
