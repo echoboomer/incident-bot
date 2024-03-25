@@ -10,7 +10,7 @@ flask-debugtoolbar==0.14.1
 flask-jwt-extended==4.6.0
 flask-limiter==3.5.1
 flask-login==0.6.3
-flask-marshmallow==1.2.0
+flask-marshmallow==1.2.1
 marshmallow==3.21.1
 marshmallow_sqlalchemy==1.0.0
 opsgenie-sdk==2.1.5
