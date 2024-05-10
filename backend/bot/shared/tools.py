@@ -18,6 +18,10 @@ timestamp_fmt_short = "%d/%m/%Y %H:%M:%S %Z"
 
 application_timezone = config.active.options.get("timezone")
 
+def parse_timestamp(timestamp_string: str) -> datetime:
+    """Parses a '2024-02-13T20:52:58 AEDT' formatted string to a datetime object with timezone"""
+    return datetime.strptime(timestamp_string, timestamp_fmt).astimezone(timezone(application_timezone))
+
 
 def fetch_timestamp(short: bool = False):
     """Return a localized, formatted timestamp using datetime.now()"""

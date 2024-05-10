@@ -15,7 +15,7 @@ from bot.models.pager import read_pager_auto_page_targets
 from bot.scheduler import scheduler
 from bot.shared import tools
 from bot.slack.client import (
-    get_user_name,
+    get_slack_user,
     slack_web_client,
     slack_workspace_id,
 )
@@ -543,7 +543,7 @@ def reaction_added(event, say):
                                 img=res.content,
                                 mimetype=file["mimetype"],
                                 ts=tools.fetch_timestamp(short=True),
-                                user=get_user_name(user_id=message["user"]),
+                                user=get_slack_user(user_id=message["user"]["real_name"]),
                             )
                             # Revoke public access
                             try:
@@ -582,7 +582,7 @@ def reaction_added(event, say):
                         incident_id=channel_info["channel"]["name"],
                         content=message["text"],
                         ts=tools.fetch_timestamp(short=True),
-                        user=get_user_name(user_id=message["user"]),
+                        user=get_slack_user(user_id=message["user"]["real_name"]),
                     )
             except Exception as error:
                 logger.error(

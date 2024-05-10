@@ -27,6 +27,7 @@ integrations:
       auto_create_postmortem: true
       space: ENG
       parent: Postmortems
+      postmortem_template_id: 123123
     jira:
       project: INCMGMT
       issue_types: ['Task', 'Epic', 'Story']
@@ -46,7 +47,22 @@ If you use the pinned items feature, those will automatically be added to the do
 
 There is also a timeline feature accessible using the `/timeline` shortcut in Slack.
 
-All fields are **required** for this section.
+All fields are **required** for this section with the exception of `postmortem_template_id`. Set `postmortem_template_id` to the id of an existing **custom jira template** in your workspace to use a custom template for postmortems.
+
+Template variables available:
+| Key  | Description |
+|---|---|
+| {incident_id}  | The id of the incident  |
+| {incident_commander}  | A confluence link to the incident_commander|
+| {incident_date}  | Date of the incident |
+| {severity}  | Severity of the incident |
+| {severity_definition}  | The definition of the severity |
+| {timeline_table_html}  | A table with with two columns: timestamps and timeline events|
+| {pinned_messages_html}  | A block containing all the pinned messages|
+| {roles_html}  | Each role and the person assigned. |
+| {description}  | The channel description|
+| {channel_link}  | A html link to the slack channel|
+
 
 ### Using the Jira Integration
 
@@ -88,7 +104,7 @@ You can integrate with Opsgenie to create incidents. To start, you'll need an AP
 
 !!! warning
 
-    If you're using Opsgenie's **Free** or **Essentials** plan or if you’re using Opsgenie with Jira Service Management's Standard plan, you can add this integration from your team dashboard only. The Integrations page under Settings is not available in your plan. 
+    If you're using Opsgenie's **Free** or **Essentials** plan or if you’re using Opsgenie with Jira Service Management's Standard plan, you can add this integration from your team dashboard only. The Integrations page under Settings is not available in your plan.
 
 In short, you can only create an API integration for a team if on one of these plans. The drop down when creating an alert will only ever show this team as the recipient. If you wish to use more than one team, you will need to upgrade to a compatible plan and provide an organization-wide key.
 

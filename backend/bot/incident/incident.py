@@ -1,8 +1,10 @@
 import asyncio
-import config
 import re
-import slack_sdk.errors
+from datetime import datetime
+from typing import Dict
 
+import config
+import slack_sdk.errors
 from bot.audit import log
 from bot.exc import ConfigurationError
 from bot.models.incident import (
@@ -26,9 +28,7 @@ from bot.templates.incident.digest_notification import (
 )
 from bot.zoom.meeting import ZoomMeeting
 from cerberus import Validator
-from datetime import datetime
 from iblog import logger
-from typing import Dict
 
 # How many total characters are allowed in a Slack channel name?
 # Limit the channel name to 76 to take this into account

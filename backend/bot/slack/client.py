@@ -352,9 +352,9 @@ def check_user_in_group(user_id: str, group_name: str) -> bool:
         )
 
 
-def get_user_name(user_id: str) -> str:
+def get_slack_user(user_id: str) -> dict | None:
     """
-    Get a single user's real_name from a user ID
+    Get a single user from a user ID
 
     This is done against the local database so it won't work unless the job to store
     slack user data has been run
@@ -362,9 +362,8 @@ def get_user_name(user_id: str) -> str:
     ulist = Session.query(OperationalData).filter_by(id="slack_users").one()
     for obj in ulist.json_data:
         if user_id in obj.values():
-            return obj["real_name"]
-        else:
-            continue
+            return obj
+    return None
 
 
 def get_slack_users() -> List[Dict[str, Any]]:
@@ -392,6 +391,7 @@ def get_slack_users() -> List[Dict[str, Any]]:
         {
             "name": user["name"],
             "real_name": user["profile"]["real_name"],
+            "email": user['profile'].get("email"), # this requires user:read.email scope
             "id": user["id"],
         }
         for user in users
