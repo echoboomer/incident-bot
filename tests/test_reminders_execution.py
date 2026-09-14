@@ -192,6 +192,19 @@ class TestRunReminder:
 
         mock_sched.delete_job.assert_called_once_with(job_to_delete=mine.id)
 
+    def test_a_broken_scheduler_does_not_break_the_tick(self):
+        """The cleanup is a courtesy; it must not take the reminder down with it."""
+        record = _make_record()
+
+        with (
+            patch("incidentbot.incident.reminders.IncidentDatabaseInterface.get_one", return_value=record),
+            patch("incidentbot.incident.status.is_final", return_value=True),
+            patch("incidentbot.incident.reminders.get_adapter", return_value=MagicMock()),
+            patch("incidentbot.incident.reminders.TaskScheduler") as mock_sched,
+        ):
+            mock_sched.list_jobs.side_effect = RuntimeError("scheduler is gone")
+            run_reminder("C123", "comms_reminder")  # must not raise
+
     def test_keeps_the_job_when_the_incident_cannot_be_read(self):
         """get_one returns None for a database blip too, not only for a missing row.
 

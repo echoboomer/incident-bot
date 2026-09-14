@@ -166,14 +166,14 @@ class TestWidgetCreateIncident(unittest.TestCase):
 
 
 class TestWidgetUpdateIncidentRoom(unittest.TestCase):
-    def _post(self, body, session=None, apply_status_change=None):
+    def _post(self, body, session=None, apply_status_change=None, adapter=None):
         incident = _make_incident()
         ctx = _mock_session(incident) if session is None else session
         apply = apply_status_change or MagicMock(return_value=(incident, None))
         with (
             patch("incidentbot.api.routes.widget.verify_widget_token", return_value=VALID_PAYLOAD),
             patch("incidentbot.api.routes.widget.Session", return_value=ctx),
-            patch("incidentbot.api.routes.widget.get_adapter", return_value=MagicMock()),
+            patch("incidentbot.api.routes.widget.get_adapter", return_value=adapter or MagicMock()),
             patch("incidentbot.api.routes.widget.EventLogHandler"),
             patch("incidentbot.api.routes.widget.apply_status_change", apply),
             patch("incidentbot.api.routes.widget.settings", _mock_settings),
@@ -254,6 +254,23 @@ class TestWidgetUpdateIncidentRoom(unittest.TestCase):
         apply.assert_called_once()
         self.assertEqual(apply.call_args[0][1], "resolved")
         self.assertEqual(apply.call_args[1]["user"], "@alice:example.com")
+
+    def test_resolve_posts_the_postmortem_link_in_the_room(self):
+        """Slack announces it, so the widget has to as well."""
+        adapter = MagicMock()
+        apply = MagicMock(
+            return_value=(_make_incident(status="resolved"), "https://gitlab.example/-/issues/7")
+        )
+        resp = self._post({"action": "resolve"}, apply_status_change=apply, adapter=adapter)
+
+        self.assertEqual(resp.status_code, 200)
+        posted = [call.args[1] for call in adapter.send_text.call_args_list]
+        self.assertIn("Postmortem: https://gitlab.example/-/issues/7", posted)
+
+    def test_no_postmortem_means_one_message(self):
+        adapter = MagicMock()
+        self._post({"action": "resolve"}, adapter=adapter)
+        self.assertEqual(adapter.send_text.call_count, 1)
 
     def test_set_status_goes_through_apply_status_change(self):
         apply = MagicMock(return_value=(_make_incident(status="identified"), None))
