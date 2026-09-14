@@ -1330,6 +1330,10 @@ async def set_status(
                         "error sending message back to user via slash command invocation", error=error
                     )
 
+        if incident.status == status:
+            # Nothing changed, so there is nothing to announce either.
+            return
+
         # The postmortem, the ticket sync, the database write, the event log,
         # the automations and the reminder jobs. Everything a status change does
         # on every platform.

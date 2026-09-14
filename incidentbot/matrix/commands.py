@@ -1,6 +1,10 @@
 from html import escape
 from incidentbot.configuration.settings import settings
-from incidentbot.incident.status import apply_status_change, first_final_status
+from incidentbot.incident.status import (
+    apply_status_change,
+    final_statuses,
+    first_final_status,
+)
 from incidentbot.logging import logger
 from incidentbot.matrix.messages import MatrixMessages
 from incidentbot.models.database import (
@@ -34,9 +38,11 @@ async def handle_help(room_id: str, client, digest_room_id: str = "") -> None:
 
 async def handle_status(room_id: str, client) -> None:
     with Session(engine) as session:
+        # From config, not a hardcoded pair: an install with its own final
+        # status was listing closed incidents as open.
         incidents = session.exec(
             select(IncidentRecord).where(
-                ~IncidentRecord.status.in_(["resolved", "archived"])
+                ~IncidentRecord.status.in_(sorted(final_statuses()) or ["resolved"])
             )
         ).all()
 
@@ -217,7 +223,7 @@ async def handle_resolve(room_id: str, args: list[str], client) -> None:
     # Not a plain status write: this also cancels the reminder jobs, syncs the
     # ticket and runs the on_final_status automations. Writing record.status
     # here instead left the reminders firing for a resolved incident.
-    record, _ = apply_status_change(record, final_status)
+    record, postmortem_link = apply_status_change(record, final_status)
 
     lead_participant = None
     with Session(engine) as session:
@@ -236,3 +242,6 @@ async def handle_resolve(room_id: str, args: list[str], client) -> None:
     get_adapter().set_room_topic(room_id=record.channel_id, topic=topic)
 
     await client.send_text_async(room_id, f"{record.slug} marked as {final_status}.")
+
+    if postmortem_link:
+        await client.send_text_async(room_id, f"Postmortem: {postmortem_link}")

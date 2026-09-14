@@ -275,14 +275,19 @@ async def widget_update_incident_room(
                 # Writes the status, cancels the reminder jobs on a final
                 # status, syncs the ticket and writes the event log. A plain
                 # `incident.status = ...` here left the reminders running.
-                apply_status_change(incident, target_status, user=body.user)
-                session.refresh(incident)
+                # Use the record it hands back: the write happened on another
+                # connection, so this session still holds the old status.
+                incident, postmortem_link = apply_status_change(
+                    incident, target_status, user=body.user
+                )
 
                 _update_room_topic(adapter, incident)
                 adapter.send_text(
                     room_id,
                     f"Incident status updated to {target_status.title()}.",
                 )
+                if postmortem_link:
+                    adapter.send_text(room_id, f"Postmortem: {postmortem_link}")
                 return SuccessResponse(
                     result="success",
                     message=f"Status updated to {target_status.title()}",

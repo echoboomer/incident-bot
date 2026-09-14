@@ -50,57 +50,66 @@ def build_postmortem_title(incident: IncidentRecord) -> str:
     )
 
 
-def _create_postmortem(incident: IncidentRecord) -> str | None:
-    """Create the postmortem for a resolved incident, once.
+def _postmortem_classes() -> list[type]:
+    """Every enabled postmortem integration, in the order they are created.
 
-    Returns the link, or None when no postmortem integration is enabled or one
-    already exists.
+    Both can be on at once, and an install with both expects both pages.
+    """
+    integrations = settings.integrations
+    if not integrations:
+        return []
+
+    classes = []
+
+    confluence = getattr(getattr(integrations, "atlassian", None), "confluence", None)
+    if confluence and confluence.enabled and confluence.auto_create_postmortem:
+        from incidentbot.confluence.postmortem import IncidentPostmortem as Confluence
+
+        classes.append(Confluence)
+
+    gitlab = getattr(integrations, "gitlab", None)
+    if gitlab and gitlab.enabled and gitlab.auto_create_postmortem:
+        from incidentbot.gitlab.postmortem import IncidentPostmortem as GitLab
+
+        classes.append(GitLab)
+
+    return classes
+
+
+def _create_postmortem(incident: IncidentRecord) -> str | None:
+    """Create the postmortems for a resolved incident, once.
+
+    Returns the first link, or None when no integration is enabled or a
+    postmortem already exists.
     """
     if IncidentDatabaseInterface.get_postmortem(parent=incident.id):
         return None
 
-    integrations = settings.integrations
-    if not integrations:
-        return None
+    first_link = None
 
-    postmortem_class = None
+    for postmortem_class in _postmortem_classes():
+        postmortem_link = postmortem_class(
+            incident=incident,
+            participants=IncidentDatabaseInterface.list_participants(incident=incident),
+            timeline=EventLogHandler.read(incident_id=incident.id),
+            title=build_postmortem_title(incident),
+        ).create()
 
-    confluence = getattr(getattr(integrations, "atlassian", None), "confluence", None)
-    if confluence and confluence.enabled and confluence.auto_create_postmortem:
-        from incidentbot.confluence.postmortem import IncidentPostmortem
+        if not postmortem_link:
+            continue
 
-        postmortem_class = IncidentPostmortem
+        IncidentDatabaseInterface.add_postmortem(
+            parent=incident.id, url=postmortem_link
+        )
+        EventLogHandler.create(
+            event="Postmortem generated",
+            incident_id=incident.id,
+            incident_slug=incident.slug,
+            source="system",
+        )
+        first_link = first_link or postmortem_link
 
-    gitlab = getattr(integrations, "gitlab", None)
-    if gitlab and gitlab.enabled and gitlab.auto_create_postmortem:
-        from incidentbot.gitlab.postmortem import IncidentPostmortem
-
-        postmortem_class = IncidentPostmortem
-
-    if not postmortem_class:
-        return None
-
-    postmortem_link = postmortem_class(
-        incident=incident,
-        participants=IncidentDatabaseInterface.list_participants(incident=incident),
-        timeline=EventLogHandler.read(incident_id=incident.id),
-        title=build_postmortem_title(incident),
-    ).create()
-
-    if not postmortem_link:
-        return None
-
-    IncidentDatabaseInterface.add_postmortem(
-        parent=incident.id, url=postmortem_link
-    )
-    EventLogHandler.create(
-        event="Postmortem generated",
-        incident_id=incident.id,
-        incident_slug=incident.slug,
-        source="system",
-    )
-
-    return postmortem_link
+    return first_link
 
 
 def _resolve_pagerduty_incidents(incident: IncidentRecord) -> None:
@@ -163,22 +172,35 @@ def apply_status_change(
     incident.
     """
 
+    # Asking for the status it already has does nothing. Without this, a second
+    # resolve (a retry, two responders, a double-clicked button) fires the
+    # on_final_status automations again, and whatever they page.
+    if incident.status == status:
+        logger.info(
+            "incident status unchanged, nothing to do",
+            channel=incident.channel_name,
+            status=status,
+        )
+        return incident, None
+
     postmortem_link = None
 
-    if is_final(status):
+    # Only the first final status opens a postmortem and resolves the pager. A
+    # later one, say archived after resolved, must not do either again.
+    if is_final(status) and status == first_final_status():
         postmortem_link = _create_postmortem(incident)
         _resolve_pagerduty_incidents(incident)
 
     _sync_tickets(incident, status)
 
-    try:
-        IncidentDatabaseInterface.update_col(
-            channel_id=incident.channel_id,
-            col_name="status",
-            value=status,
-        )
-    except Exception as error:
-        logger.exception("error updating entry in database", error=error)
+    # Deliberately not swallowed: the caller has to fail visibly. Carrying on
+    # would cancel the reminders and run the final-status automations for an
+    # incident the database still has as open.
+    IncidentDatabaseInterface.update_col(
+        channel_id=incident.channel_id,
+        col_name="status",
+        value=status,
+    )
 
     EventLogHandler.create(
         event=f"The incident status was changed to {status}",

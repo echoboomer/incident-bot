@@ -162,3 +162,81 @@ class TestApplyStatusChange:
     def test_event_log_records_the_user(self):
         run = self._run("identified", user="@alice:example.com")
         assert run.event_log.create.call_args[1]["user"] == "@alice:example.com"
+
+    def test_a_second_resolve_does_nothing(self):
+        """Resolving twice must not fire the final-status automations again.
+
+        A retry, two responders or a double-clicked button all send it twice,
+        and on_final_status is wired to whatever pages people.
+        """
+        incident = _make_incident(status="resolved")
+        statuses = {
+            "investigating": SimpleNamespace(final=False),
+            "resolved": SimpleNamespace(final=True),
+        }
+
+        with (
+            patch.object(_status, "settings", _make_settings(statuses=statuses)),
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "cancel_reminder_jobs") as cancel,
+            patch.object(_status, "run_automations") as automations,
+        ):
+            result, postmortem_link = _status.apply_status_change(incident, "resolved")
+
+        assert result is incident
+        assert postmortem_link is None
+        db.update_col.assert_not_called()
+        cancel.assert_not_called()
+        automations.assert_not_called()
+
+    def test_a_failed_write_stops_the_status_change(self):
+        """No silent half-change: reminders must not be cancelled for an open incident."""
+        incident = _make_incident()
+        statuses = {"resolved": SimpleNamespace(final=True)}
+
+        with (
+            patch.object(_status, "settings", _make_settings(statuses=statuses)),
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "EventLogHandler"),
+            patch.object(_status, "cancel_reminder_jobs") as cancel,
+            patch.object(_status, "run_automations") as automations,
+            patch.object(_status, "_create_postmortem", return_value=None),
+            patch.object(_status, "_resolve_pagerduty_incidents"),
+        ):
+            db.update_col.side_effect = RuntimeError("database down")
+
+            try:
+                _status.apply_status_change(incident, "resolved")
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("apply_status_change swallowed the write failure")
+
+        cancel.assert_not_called()
+        automations.assert_not_called()
+
+    def test_only_the_first_final_status_opens_a_postmortem(self):
+        """resolved opens one; a later archived must not open a second."""
+        incident = _make_incident(status="resolved")
+        statuses = {
+            "investigating": SimpleNamespace(final=False),
+            "resolved": SimpleNamespace(final=True),
+            "archived": SimpleNamespace(final=True),
+        }
+
+        with (
+            patch.object(_status, "settings", _make_settings(statuses=statuses)),
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "EventLogHandler"),
+            patch.object(_status, "cancel_reminder_jobs") as cancel,
+            patch.object(_status, "run_automations"),
+            patch.object(_status, "_create_postmortem") as postmortem,
+            patch.object(_status, "_resolve_pagerduty_incidents") as pagerduty,
+        ):
+            db.get_one.return_value = _make_incident(status="archived")
+            _status.apply_status_change(incident, "archived")
+
+        postmortem.assert_not_called()
+        pagerduty.assert_not_called()
+        # Still a final status, so the reminders do go.
+        cancel.assert_called_once_with("inc-1")

@@ -40,11 +40,17 @@ def run_reminder(channel_id: str, reminder_id: str) -> None:
 
     record = IncidentDatabaseInterface.get_one(channel_id=channel_id)
 
-    # A job that outlived its incident deletes itself. Without this, one
-    # incident resolved outside the Slack handler kept a job posting into a
-    # room the bot had already left, every interval, until the next restart.
-    if not record or is_final(record.status):
+    # A job for a resolved incident deletes itself. Without this, one incident
+    # resolved outside the Slack handler kept a job posting into a room the bot
+    # had already left, every interval, until the next restart.
+    if record and is_final(record.status):
         _delete_jobs_for(channel_id, reminder_id)
+        return
+
+    # No record is not proof the incident is gone: get_one logs and returns None
+    # for a connection blip too, and the jobs live in memory only, so deleting
+    # here would silence an open incident for good. Skip this tick instead.
+    if not record:
         return
 
     if not evaluate(reminder.conditions, record):
