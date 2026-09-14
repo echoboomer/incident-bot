@@ -171,6 +171,21 @@ class TestSetStatus:
 
         mock_update.assert_not_called()
 
+    def test_an_api_call_for_the_current_status_announces_nothing(self):
+        """Nothing changed, so the room should not be told that it did."""
+        incident = _make_incident(status="resolved")
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "resolved", "api"))
+
+        mock_apply.assert_not_called()
+        mock_client.chat_postMessage.assert_not_called()
+
     def test_posts_the_resolution_message_on_a_final_status(self):
         incident = _make_incident()
         mock_client = MagicMock()
