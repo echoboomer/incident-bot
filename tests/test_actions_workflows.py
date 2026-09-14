@@ -433,3 +433,39 @@ class TestLeaveIncidentAsRole:
             asyncio.run(leave_incident_as_role("C123", "scribe", user))
 
         mock_remove.assert_not_called()
+
+
+# ── _create_new_postmortem ────────────────────────────────────────────────────
+
+
+class TestCreateNewPostmortem:
+    """Confluence first, GitLab second, and the title comes from the shared helper."""
+
+    def _run(self, confluence_link, gitlab_link):
+        from incidentbot.incident.actions import _create_new_postmortem
+
+        incident = _make_incident()
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_participants", return_value=[]),
+            patch("incidentbot.incident.actions.EventLogHandler.read", return_value=[]),
+            patch("incidentbot.incident.actions.build_postmortem_title", return_value="A title") as title,
+            patch("incidentbot.incident.actions._create_confluence_postmortem", return_value=confluence_link) as confluence,
+            patch("incidentbot.incident.actions._create_gitlab_postmortem", return_value=gitlab_link) as gitlab,
+        ):
+            link = _create_new_postmortem(incident)
+        return link, title, confluence, gitlab
+
+    def test_confluence_wins_when_it_returns_a_link(self):
+        link, title, _confluence, gitlab = self._run("https://confluence.example/pm", None)
+        assert link == "https://confluence.example/pm"
+        title.assert_called_once()
+        gitlab.assert_not_called()
+
+    def test_falls_through_to_gitlab(self):
+        link, _title, confluence, _gitlab = self._run(None, "https://gitlab.example/-/issues/1")
+        assert link == "https://gitlab.example/-/issues/1"
+        confluence.assert_called_once()
+
+    def test_returns_nothing_when_neither_produces_one(self):
+        link, _title, _confluence, _gitlab = self._run(None, None)
+        assert link is None
