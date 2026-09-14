@@ -5,7 +5,8 @@ The point of this module is that it runs the same for Slack, Matrix and the
 widget API, so what is asserted here is the part that used to be Slack-only:
 the reminder jobs get cancelled on a final status.
 """
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tests.runtime import load_module
@@ -240,3 +241,172 @@ class TestApplyStatusChange:
         pagerduty.assert_not_called()
         # Still a final status, so the reminders do go.
         cancel.assert_called_once_with("inc-1")
+
+
+def _stub_module(name: str, attr: str, value) -> ModuleType:
+    """Put a stand-in module in sys.modules for an import inside a function.
+
+    status.py imports the integration clients lazily, so the usual patch target
+    does not exist until the call happens, and importing the real module would
+    drag in the whole GitLab or Confluence client.
+    """
+    module = ModuleType(name)
+    setattr(module, attr, value)
+    sys.modules[name] = module
+    return module
+
+
+def _integrations(
+    *, gitlab_postmortem=False, confluence_postmortem=False, gitlab_mapping=None,
+    jira_mapping=None, pagerduty=False,
+):
+    gitlab = SimpleNamespace(
+        enabled=bool(gitlab_postmortem or gitlab_mapping),
+        auto_create_postmortem=gitlab_postmortem,
+        status_mapping=gitlab_mapping,
+    )
+    confluence = SimpleNamespace(
+        enabled=confluence_postmortem, auto_create_postmortem=confluence_postmortem
+    )
+    jira = SimpleNamespace(enabled=bool(jira_mapping), status_mapping=jira_mapping)
+    return SimpleNamespace(
+        gitlab=gitlab,
+        atlassian=SimpleNamespace(confluence=confluence, jira=jira),
+        pagerduty=SimpleNamespace(enabled=pagerduty),
+    )
+
+
+class TestPostmortem:
+    def test_no_integrations_means_no_postmortem(self):
+        with patch.object(_status, "settings", _make_settings(integrations=None)):
+            assert _status._postmortem_classes() == []
+
+    def test_both_integrations_run(self):
+        """An install with both enabled expects both pages, not the last one.
+
+        This is exactly what a single postmortem_class variable got wrong.
+        """
+        confluence = MagicMock(name="ConfluencePostmortem")
+        gitlab = MagicMock(name="GitLabPostmortem")
+        _stub_module("incidentbot.confluence.postmortem", "IncidentPostmortem", confluence)
+        _stub_module("incidentbot.gitlab.postmortem", "IncidentPostmortem", gitlab)
+
+        settings = _make_settings(
+            integrations=_integrations(gitlab_postmortem=True, confluence_postmortem=True)
+        )
+        with patch.object(_status, "settings", settings):
+            assert _status._postmortem_classes() == [confluence, gitlab]
+
+    def test_skips_creation_when_one_already_exists(self):
+        with (
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "_postmortem_classes") as classes,
+        ):
+            db.get_postmortem.return_value = MagicMock()
+            assert _status._create_postmortem(_make_incident()) is None
+        classes.assert_not_called()
+
+    def test_records_the_link_and_writes_the_event_log(self):
+        postmortem = MagicMock()
+        postmortem.return_value.create.return_value = "https://gitlab.example/issues/1"
+
+        with (
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "EventLogHandler") as event_log,
+            patch.object(_status, "_postmortem_classes", return_value=[postmortem]),
+        ):
+            db.get_postmortem.return_value = None
+            link = _status._create_postmortem(_make_incident())
+
+        assert link == "https://gitlab.example/issues/1"
+        db.add_postmortem.assert_called_once_with(
+            parent=1, url="https://gitlab.example/issues/1"
+        )
+        event_log.create.assert_called_once()
+
+    def test_a_failed_creation_returns_nothing(self):
+        postmortem = MagicMock()
+        postmortem.return_value.create.return_value = None
+
+        with (
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+            patch.object(_status, "EventLogHandler"),
+            patch.object(_status, "_postmortem_classes", return_value=[postmortem]),
+        ):
+            db.get_postmortem.return_value = None
+            assert _status._create_postmortem(_make_incident()) is None
+        db.add_postmortem.assert_not_called()
+
+
+class TestTicketSync:
+    def test_nothing_happens_without_a_status_mapping(self):
+        settings = _make_settings(integrations=_integrations())
+        with patch.object(_status, "settings", settings):
+            # No stub modules registered, so an import here would raise.
+            _status._sync_tickets(_make_incident(), "resolved")
+
+    def test_gitlab_and_jira_are_both_updated(self):
+        gitlab_api = MagicMock()
+        jira_api = MagicMock()
+        _stub_module("incidentbot.gitlab.api", "GitLabApi", gitlab_api)
+        _stub_module("incidentbot.jira.api", "JiraApi", jira_api)
+
+        settings = _make_settings(
+            integrations=_integrations(
+                gitlab_mapping={"resolved": "closed"}, jira_mapping={"resolved": "Done"}
+            )
+        )
+        with patch.object(_status, "settings", settings):
+            _status._sync_tickets(_make_incident(), "resolved")
+
+        gitlab_api.return_value.update_issue_status.assert_called_once_with(
+            incident_name="inc-1", incident_status="resolved"
+        )
+        jira_api.return_value.update_issue_status.assert_called_once_with(
+            incident_name="inc-1", incident_status="resolved"
+        )
+
+
+class TestPagerDuty:
+    def test_nothing_happens_when_disabled(self):
+        settings = _make_settings(integrations=_integrations(pagerduty=False))
+        with patch.object(_status, "settings", settings):
+            _status._resolve_pagerduty_incidents(_make_incident())
+
+    def test_every_linked_incident_is_resolved(self):
+        interface = MagicMock()
+        _stub_module("incidentbot.pagerduty.api", "PagerDutyInterface", interface)
+
+        settings = _make_settings(integrations=_integrations(pagerduty=True))
+        with (
+            patch.object(_status, "settings", settings),
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+        ):
+            db.list_pagerduty_incident_records.return_value = [
+                SimpleNamespace(url="https://pd.example/incidents/PD1"),
+                SimpleNamespace(url="https://pd.example/incidents/PD2"),
+            ]
+            _status._resolve_pagerduty_incidents(_make_incident())
+
+        assert [c.args[0] for c in interface.return_value.resolve.call_args_list] == [
+            "PD1",
+            "PD2",
+        ]
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        interface = MagicMock()
+        interface.return_value.resolve.side_effect = [RuntimeError("pagerduty down"), None]
+        _stub_module("incidentbot.pagerduty.api", "PagerDutyInterface", interface)
+
+        settings = _make_settings(integrations=_integrations(pagerduty=True))
+        with (
+            patch.object(_status, "settings", settings),
+            patch.object(_status, "IncidentDatabaseInterface") as db,
+        ):
+            db.list_pagerduty_incident_records.return_value = [
+                SimpleNamespace(url="https://pd.example/incidents/PD1"),
+                SimpleNamespace(url="https://pd.example/incidents/PD2"),
+            ]
+            _status._resolve_pagerduty_incidents(_make_incident())
+
+        assert interface.return_value.resolve.call_count == 2
