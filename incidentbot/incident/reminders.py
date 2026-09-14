@@ -10,13 +10,46 @@ def _job_id(slug: str, reminder_id: str) -> str:
     return f"{slug}_{reminder_id}"
 
 
+def _delete_jobs_for(channel_id: str, reminder_id: str) -> None:
+    """Remove the jobs firing for this channel and reminder.
+
+    Looked up by args, not by id: an incident that is gone from the database
+    cannot be addressed by its slug any more.
+    """
+    try:
+        for job in TaskScheduler.list_jobs():
+            if list(job.args or []) == [channel_id, reminder_id]:
+                TaskScheduler.delete_job(job_to_delete=job.id)
+    except Exception as error:
+        logger.exception(
+            "error removing orphaned reminder job",
+            channel_id=channel_id,
+            reminder=reminder_id,
+            error=error,
+        )
+
+
 def run_reminder(channel_id: str, reminder_id: str) -> None:
     """Generic APScheduler job function for all configured reminders."""
+    # Local import: incident.status imports cancel_reminder_jobs from here.
+    from incidentbot.incident.status import is_final
+
     reminder = next((r for r in settings.reminders if r.id == reminder_id), None)
     if not reminder or not reminder.enabled:
         return
 
     record = IncidentDatabaseInterface.get_one(channel_id=channel_id)
+
+    # A job for a resolved incident deletes itself. Without this, one incident
+    # resolved outside the Slack handler kept a job posting into a room the bot
+    # had already left, every interval, until the next restart.
+    if record and is_final(record.status):
+        _delete_jobs_for(channel_id, reminder_id)
+        return
+
+    # No record is not proof the incident is gone: get_one logs and returns None
+    # for a connection blip too, and the jobs live in memory only, so deleting
+    # here would silence an open incident for good. Skip this tick instead.
     if not record:
         return
 

@@ -1,4 +1,3 @@
-import datetime
 import re
 
 import requests
@@ -7,7 +6,11 @@ from incidentbot.exceptions import IndexNotFoundError
 from incidentbot.incident.automations import run as run_automations
 from incidentbot.incident.core import format_channel_name
 from incidentbot.incident.event import EventLogHandler
-from incidentbot.incident.reminders import cancel_reminder_jobs
+from incidentbot.incident.status import (
+    apply_status_change,
+    build_postmortem_title,
+    is_final,
+)
 from incidentbot.logging import logger
 from incidentbot.models.database import ApplicationData, engine
 from incidentbot.models.incident import IncidentDatabaseInterface
@@ -81,26 +84,6 @@ def _get_channel_topic(channel_id: str) -> list[str]:
         .get("value")
         .split("|")
     ]
-
-
-def _get_final_statuses() -> set[str]:
-    statuses = settings.statuses or {}
-    return {
-        status_name
-        for status_name, config in statuses.items()
-        if getattr(config, "final", False)
-    }
-
-
-def _is_final_status(status: str) -> bool:
-    return status in _get_final_statuses()
-
-
-def _build_postmortem_title(incident) -> str:
-    return (
-        f"{datetime.datetime.today().strftime('%Y-%m-%d')} - "
-        f"{incident.slug.upper()} - {incident.description}"
-    )
 
 
 def _get_existing_postmortem_link(incident_id: int) -> str | None:
@@ -530,7 +513,7 @@ def _create_gitlab_postmortem(
 def _create_new_postmortem(incident) -> str | None:
     participants = IncidentDatabaseInterface.list_participants(incident=incident)
     timeline = EventLogHandler.read(incident_id=incident.id)
-    title = _build_postmortem_title(incident)
+    title = build_postmortem_title(incident)
 
     providers = (
         ("Confluence", _create_confluence_postmortem),
@@ -594,7 +577,7 @@ def _sync_confluence_postmortem(incident, postmortem_link: str) -> bool:
         incident=incident,
         participants=participants,
         timeline=timeline,
-        title=_build_postmortem_title(incident),
+        title=build_postmortem_title(incident),
     )
 
     return postmortem.sync(page_id=page_id)
@@ -1347,108 +1330,17 @@ async def set_status(
                         "error sending message back to user via slash command invocation", error=error
                     )
 
-        postmortem_link = None
+        if incident.status == status:
+            # Nothing changed, so there is nothing to announce either.
+            return
 
-        final_statuses = [
-            status
-            for status, config in settings.statuses.items()
-            if config.final
-        ]
-        if final_statuses and status == final_statuses[0]:
-            # First, make sure a postmortem doesn't already exist
-            if not IncidentDatabaseInterface.get_postmortem(
-                parent=incident.id,
-            ):
-                # Generate postmortem template and create postmortem if enabled
-                # Get normalized description as postmortem title
-                if (
-                    settings.integrations
-                    and settings.integrations.atlassian
-                    and settings.integrations.atlassian.confluence
-                    and settings.integrations.atlassian.confluence.enabled
-                    and settings.integrations.atlassian.confluence.auto_create_postmortem
-                ):
-                    from incidentbot.confluence.postmortem import (
-                        IncidentPostmortem,
-                    )
+        # The postmortem, the ticket sync, the database write, the event log,
+        # the automations and the reminder jobs. Everything a status change does
+        # on every platform.
+        incident, postmortem_link = apply_status_change(incident, status)
 
-                    postmortem = IncidentPostmortem(
-                        incident=incident,
-                        participants=IncidentDatabaseInterface.list_participants(
-                            incident=incident
-                        ),
-                        timeline=EventLogHandler.read(incident_id=incident.id),
-                        title=f"{datetime.datetime.today().strftime('%Y-%m-%d')} - {incident.slug.upper()} - {incident.description}",
-                    )
-                    postmortem_link = postmortem.create()
-
-                    if postmortem_link:
-                        IncidentDatabaseInterface.add_postmortem(
-                            parent=incident.id, url=postmortem_link
-                        )
-                        EventLogHandler.create(
-                            event="Postmortem generated",
-                            incident_id=incident.id,
-                            incident_slug=incident.slug,
-                            source="system",
-                        )
-                        _send_postmortem_message(incident.channel_id, postmortem_link)
-
-                # Generate Gitlab postmortem if enabled
-                # Get normalized description as postmortem title
-                if (
-                    settings.integrations
-                    and settings.integrations.gitlab
-                    and settings.integrations.gitlab.enabled
-                    and settings.integrations.gitlab.auto_create_postmortem
-                ):
-                    from incidentbot.gitlab.postmortem import (
-                        IncidentPostmortem,
-                    )
-
-                    postmortem = IncidentPostmortem(
-                        incident=incident,
-                        participants=IncidentDatabaseInterface.list_participants(
-                            incident=incident
-                        ),
-                        timeline=EventLogHandler.read(incident_id=incident.id),
-                        title=f"{datetime.datetime.today().strftime('%Y-%m-%d')} - {incident.slug.upper()} - {incident.description}",
-                    )
-                    postmortem_link = postmortem.create()
-
-                    if postmortem_link:
-                        IncidentDatabaseInterface.add_postmortem(
-                            parent=incident.id, url=postmortem_link
-                        )
-                        EventLogHandler.create(
-                            event="Postmortem generated",
-                            incident_id=incident.id,
-                            incident_slug=incident.slug,
-                            source="system",
-                        )
-                        _send_postmortem_message(incident.channel_id, postmortem_link)
-
-            # If PagerDuty incident(s) exist, attempt to resolve them
-            if (
-                settings.integrations
-                and settings.integrations.pagerduty
-                and settings.integrations.pagerduty.enabled
-            ):
-                from incidentbot.pagerduty.api import PagerDutyInterface
-
-                pagerduty_interface = PagerDutyInterface()
-
-                pd_records = IncidentDatabaseInterface.list_pagerduty_incident_records(
-                    id=incident.id
-                )
-                if pd_records:
-                    for inc in pd_records:
-                        try:
-                            pagerduty_interface.resolve(inc.url.split("/")[-1])
-                        except Exception as error:
-                            logger.exception(
-                                "error resolving pagerduty incident", url=inc.url, error=error
-                            )
+        if postmortem_link:
+            _send_postmortem_message(incident.channel_id, postmortem_link)
 
         # Update digest message
         try:
@@ -1486,11 +1378,6 @@ async def set_status(
         except SlackApiError as error:
             logger.exception("error updating channel topic", error=error)
 
-        # Log
-        logger.info(
-            "updated incident status", channel=incident.channel_name, status=status
-        )
-
         # Channel notification
         try:
             result = slack_web_client.chat_postMessage(
@@ -1505,70 +1392,7 @@ async def set_status(
                 "error sending status update to incident channel", channel=incident.channel_name, error=error
             )
 
-        # Update jira ticket status last
-        if (
-            settings.integrations
-            and settings.integrations.atlassian
-            and settings.integrations.atlassian.jira
-            and settings.integrations.atlassian.jira.enabled
-            and settings.integrations.atlassian.jira.status_mapping
-        ):
-            from incidentbot.jira.api import JiraApi
-
-            jira = JiraApi()
-            jira.update_issue_status(
-                incident_name=incident.channel_name,
-                incident_status=status,
-            )
-
-        # Update gitlab ticket status
-        if (
-            settings.integrations
-            and settings.integrations.gitlab
-            and settings.integrations.gitlab.enabled
-            and settings.integrations.gitlab.status_mapping
-        ):
-            from incidentbot.gitlab.api import GitLabApi
-
-            gitlab = GitLabApi()
-            gitlab.update_issue_status(
-                incident_name=incident.channel_name, incident_status=status
-            )
-            logger.info(
-                "updated gitlab issue status", channel=incident.channel_name, status=status
-            )
-
-        # Update incident record with new status
-        try:
-            IncidentDatabaseInterface.update_col(
-                channel_id=incident.channel_id,
-                col_name="status",
-                value=status,
-            )
-        except Exception as error:
-            logger.exception("error updating entry in database", error=error)
-
-        # Write event log
-        EventLogHandler.create(
-            event=f"The incident status was changed to {status}",
-            incident_id=incident.id,
-            incident_slug=incident.slug,
-            source="system",
-        )
-
-        # Re-fetch so automations see the committed status value
-        updated_incident = IncidentDatabaseInterface.get_one(channel_id=incident.channel_id) or incident
-        run_automations("on_status_change", updated_incident)
-
-        final_statuses = [
-            status
-            for status, config in settings.statuses.items()
-            if config.final
-        ]
-        if final_statuses and status in final_statuses:
-            cancel_reminder_jobs(incident.slug)
-            run_automations("on_final_status", updated_incident)
-
+        if is_final(status):
             # Resolution message
             try:
                 result = slack_web_client.chat_postMessage(

@@ -38,80 +38,8 @@ def _make_settings(
     return s
 
 
-# ---------------------------------------------------------------------------
-# _get_final_statuses / _is_final_status
-# ---------------------------------------------------------------------------
-
-class TestFinalStatuses:
-    def test_returns_final_statuses(self):
-        statuses = {
-            "investigating": SimpleNamespace(final=False),
-            "resolved": SimpleNamespace(final=True),
-        }
-        with patch.object(_actions, "settings", _make_settings(statuses=statuses)):
-            result = _actions._get_final_statuses()
-        assert result == {"resolved"}
-
-    def test_empty_statuses_returns_empty_set(self):
-        with patch.object(_actions, "settings", _make_settings(statuses={})):
-            result = _actions._get_final_statuses()
-        assert result == set()
-
-    def test_multiple_final_statuses(self):
-        statuses = {
-            "investigating": SimpleNamespace(final=False),
-            "resolved": SimpleNamespace(final=True),
-            "postmortem": SimpleNamespace(final=True),
-        }
-        with patch.object(_actions, "settings", _make_settings(statuses=statuses)):
-            result = _actions._get_final_statuses()
-        assert result == {"resolved", "postmortem"}
-
-    def test_is_final_status_true(self):
-        statuses = {"resolved": SimpleNamespace(final=True)}
-        with patch.object(_actions, "settings", _make_settings(statuses=statuses)):
-            assert _actions._is_final_status("resolved") is True
-
-    def test_is_final_status_false(self):
-        statuses = {
-            "investigating": SimpleNamespace(final=False),
-            "resolved": SimpleNamespace(final=True),
-        }
-        with patch.object(_actions, "settings", _make_settings(statuses=statuses)):
-            assert _actions._is_final_status("investigating") is False
-
-    def test_is_final_status_unknown_status_is_false(self):
-        statuses = {"resolved": SimpleNamespace(final=True)}
-        with patch.object(_actions, "settings", _make_settings(statuses=statuses)):
-            assert _actions._is_final_status("unknown") is False
-
-
-# ---------------------------------------------------------------------------
-# _build_postmortem_title
-# ---------------------------------------------------------------------------
-
-class TestBuildPostmortemTitle:
-    def test_title_contains_slug_and_description(self):
-        incident = SimpleNamespace(slug="inc-2024-001", description="Database outage")
-        title = _actions._build_postmortem_title(incident)
-        assert "INC-2024-001" in title
-        assert "Database outage" in title
-
-    def test_title_contains_date(self):
-        import datetime
-        incident = SimpleNamespace(slug="inc-001", description="Outage")
-        title = _actions._build_postmortem_title(incident)
-        today = datetime.datetime.today().strftime("%Y-%m-%d")
-        assert today in title
-
-    def test_title_format(self):
-        incident = SimpleNamespace(slug="inc-001", description="DB crash")
-        title = _actions._build_postmortem_title(incident)
-        # Format: "YYYY-MM-DD - INC-001 - DB crash"
-        parts = title.split(" - ")
-        assert len(parts) == 3
-        assert parts[1] == "INC-001"
-        assert parts[2] == "DB crash"
+# The final-status helpers and the postmortem title moved to
+# incidentbot.incident.status; their tests live in test_incident_status.py.
 
 
 # ---------------------------------------------------------------------------

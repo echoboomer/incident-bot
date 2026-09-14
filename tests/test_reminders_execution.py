@@ -145,6 +145,81 @@ class TestRunReminder:
 
         _reminder.once = False  # restore
 
+    def test_deletes_its_own_job_when_the_incident_is_already_resolved(self):
+        """A reminder that outlives its incident cleans itself up.
+
+        The jobs live in an in-memory store, so anything that resolved an
+        incident without cancelling them kept a job firing until the next
+        restart. One such job failed 97 times in 72 hours against a room the bot
+        had already left.
+        """
+        record = _make_record()
+        mock_job = MagicMock()
+        mock_job.id = "inc-test_comms_reminder"
+        mock_job.args = ["C123", "comms_reminder"]
+        mock_adapter = MagicMock()
+
+        with (
+            patch("incidentbot.incident.reminders.IncidentDatabaseInterface.get_one", return_value=record),
+            patch("incidentbot.incident.status.is_final", return_value=True),
+            patch("incidentbot.incident.reminders.get_adapter", return_value=mock_adapter),
+            patch("incidentbot.incident.reminders.TaskScheduler") as mock_sched,
+        ):
+            mock_sched.list_jobs.return_value = [mock_job]
+            run_reminder("C123", "comms_reminder")
+
+        mock_adapter.post_reminder.assert_not_called()
+        mock_sched.delete_job.assert_called_once_with(job_to_delete=mock_job.id)
+
+    def test_deletes_only_its_own_job(self):
+        """Looked up by args, so a second incident's job is left alone."""
+        record = _make_record()
+        mine = MagicMock()
+        mine.id = "inc-test_comms_reminder"
+        mine.args = ["C123", "comms_reminder"]
+        theirs = MagicMock()
+        theirs.id = "inc-other_comms_reminder"
+        theirs.args = ["C999", "comms_reminder"]
+
+        with (
+            patch("incidentbot.incident.reminders.IncidentDatabaseInterface.get_one", return_value=record),
+            patch("incidentbot.incident.status.is_final", return_value=True),
+            patch("incidentbot.incident.reminders.get_adapter", return_value=MagicMock()),
+            patch("incidentbot.incident.reminders.TaskScheduler") as mock_sched,
+        ):
+            mock_sched.list_jobs.return_value = [theirs, mine]
+            run_reminder("C123", "comms_reminder")
+
+        mock_sched.delete_job.assert_called_once_with(job_to_delete=mine.id)
+
+    def test_a_broken_scheduler_does_not_break_the_tick(self):
+        """The cleanup is a courtesy; it must not take the reminder down with it."""
+        record = _make_record()
+
+        with (
+            patch("incidentbot.incident.reminders.IncidentDatabaseInterface.get_one", return_value=record),
+            patch("incidentbot.incident.status.is_final", return_value=True),
+            patch("incidentbot.incident.reminders.get_adapter", return_value=MagicMock()),
+            patch("incidentbot.incident.reminders.TaskScheduler") as mock_sched,
+        ):
+            mock_sched.list_jobs.side_effect = RuntimeError("scheduler is gone")
+            run_reminder("C123", "comms_reminder")  # must not raise
+
+    def test_keeps_the_job_when_the_incident_cannot_be_read(self):
+        """get_one returns None for a database blip too, not only for a missing row.
+
+        Deleting on that would silence an open incident for good: the jobs live
+        in memory and only get registered when the incident is declared.
+        """
+        with (
+            patch("incidentbot.incident.reminders.IncidentDatabaseInterface.get_one", return_value=None),
+            patch("incidentbot.incident.reminders.get_adapter", return_value=MagicMock()),
+            patch("incidentbot.incident.reminders.TaskScheduler") as mock_sched,
+        ):
+            run_reminder("C123", "comms_reminder")
+
+        mock_sched.delete_job.assert_not_called()
+
     def test_does_not_delete_job_when_once_is_false(self):
         record = _make_record()
         mock_adapter = MagicMock()

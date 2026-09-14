@@ -135,26 +135,27 @@ class TestSetSeverity:
 
 
 class TestSetStatus:
-    def test_updates_db_and_posts_messages(self):
+    def test_delegates_the_status_change_and_posts_messages(self):
+        """Slack owns the messages; the rest goes through apply_status_change.
+
+        That shared function is what cancels the reminder jobs, so every
+        platform gets the same behaviour. See tests/test_incident_status.py.
+        """
         incident = _make_incident()
         mock_client = MagicMock()
 
         with (
             patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col") as mock_update,
-            patch("incidentbot.incident.actions.EventLogHandler.create") as mock_event,
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=False),
             patch("incidentbot.incident.actions.slack_web_client", mock_client),
             patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations"),
-            patch("incidentbot.incident.actions.cancel_reminder_jobs"),
             patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
         ):
             asyncio.run(set_status("C123", "identified", "api"))
 
-        mock_update.assert_called_once_with(
-            channel_id="C123", col_name="status", value="identified"
-        )
-        mock_event.assert_called_once()
+        mock_apply.assert_called_once_with(incident, "identified")
+        mock_client.chat_postMessage.assert_called()
 
     def test_early_return_when_status_unchanged_for_human(self):
         incident = _make_incident(status="investigating")
@@ -170,49 +171,146 @@ class TestSetStatus:
 
         mock_update.assert_not_called()
 
-    def test_fires_automation_on_status_change(self):
+    def test_an_api_call_for_the_current_status_announces_nothing(self):
+        """Nothing changed, so the room should not be told that it did."""
+        incident = _make_incident(status="resolved")
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "resolved", "api"))
+
+        mock_apply.assert_not_called()
+        mock_client.chat_postMessage.assert_not_called()
+
+    def test_announces_the_postmortem_when_one_was_created(self):
         incident = _make_incident()
         mock_client = MagicMock()
 
         with (
             patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_postmortem", return_value=MagicMock()),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_pagerduty_incident_records", return_value=[]),
-            patch("incidentbot.incident.actions.EventLogHandler.create"),
+            patch(
+                "incidentbot.incident.actions.apply_status_change",
+                return_value=(incident, "https://confluence.example/postmortem"),
+            ),
+            patch("incidentbot.incident.actions.is_final", return_value=False),
+            patch("incidentbot.incident.actions._send_postmortem_message") as mock_send,
             patch("incidentbot.incident.actions.slack_web_client", mock_client),
             patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations") as mock_auto,
-            patch("incidentbot.incident.actions.cancel_reminder_jobs"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one") as mock_get,
             patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
         ):
-            mock_get.return_value = incident
+            asyncio.run(set_status("C123", "identified", "api"))
+
+        mock_send.assert_called_once_with(
+            incident.channel_id, "https://confluence.example/postmortem"
+        )
+
+    def test_a_human_asking_for_the_current_status_gets_told_so(self):
+        incident = _make_incident(status="investigating")
+        user = _make_user()
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "investigating", user))
+
+        mock_client.chat_postEphemeral.assert_called_once()
+        mock_apply.assert_not_called()
+
+    def test_a_failing_ephemeral_still_stops_at_the_unchanged_status(self):
+        """The notice is best effort; the no-op is not."""
+        from slack_sdk.errors import SlackApiError
+
+        incident = _make_incident(status="investigating")
+        user = _make_user()
+        mock_client = MagicMock()
+        mock_client.chat_postEphemeral.side_effect = SlackApiError("nope", response=None)
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "investigating", user))
+
+        mock_apply.assert_not_called()
+
+    def test_slack_being_down_does_not_undo_the_status_change(self):
+        """Every Slack call in this path is best effort.
+
+        The status, the ticket sync and the reminder cancellation already
+        happened in apply_status_change; a failing chat_update must not take the
+        rest of the function down with it.
+        """
+        from slack_sdk.errors import SlackApiError
+
+        incident = _make_incident()
+        mock_client = MagicMock()
+        for method in (
+            "chat_update",
+            "conversations_setTopic",
+            "chat_postMessage",
+        ):
+            getattr(mock_client, method).side_effect = SlackApiError("slack down", response=None)
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=True),
+            patch("incidentbot.incident.actions.BlockBuilder.resolution_message", return_value={"channel": "C123"}),
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
+            patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
+        ):
             asyncio.run(set_status("C123", "resolved", "api"))
 
-        mock_auto.assert_called()
-        triggered = [call[0][0] for call in mock_auto.call_args_list]
-        assert "on_status_change" in triggered
+        mock_apply.assert_called_once_with(incident, "resolved")
+        # Reached the last of the four: the resolution message.
+        assert mock_client.chat_postMessage.call_count == 2
 
-    def test_cancels_reminders_on_final_status(self):
+    def test_a_topic_with_a_third_segment_keeps_it(self):
         incident = _make_incident()
         mock_client = MagicMock()
 
         with (
             patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_postmortem", return_value=MagicMock()),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_pagerduty_incident_records", return_value=[]),
-            patch("incidentbot.incident.actions.EventLogHandler.create"),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)),
+            patch("incidentbot.incident.actions.is_final", return_value=False),
             patch("incidentbot.incident.actions.slack_web_client", mock_client),
             patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations"),
-            patch("incidentbot.incident.actions.cancel_reminder_jobs") as mock_cancel,
+            patch(
+                "incidentbot.incident.actions._get_channel_topic",
+                return_value=["Severity: SEV2", "Status: Investigating", "Commander: Ada"],
+            ),
+        ):
+            asyncio.run(set_status("C123", "identified", "api"))
+
+        topic = mock_client.conversations_setTopic.call_args[1]["topic"]
+        assert topic == "Severity: SEV2 | Status: Identified | Commander: Ada"
+
+    def test_posts_the_resolution_message_on_a_final_status(self):
+        incident = _make_incident()
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=True),
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
+            patch("incidentbot.incident.actions.BlockBuilder.resolution_message", return_value={"channel": "C123"}) as mock_resolution,
             patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
         ):
             asyncio.run(set_status("C123", "resolved", "api"))
 
-        mock_cancel.assert_called_once_with(incident.slug)
+        mock_apply.assert_called_once_with(incident, "resolved")
+        mock_resolution.assert_called_once()
 
     def test_posts_error_when_incident_not_found(self):
         mock_client = MagicMock()
@@ -335,3 +433,39 @@ class TestLeaveIncidentAsRole:
             asyncio.run(leave_incident_as_role("C123", "scribe", user))
 
         mock_remove.assert_not_called()
+
+
+# ── _create_new_postmortem ────────────────────────────────────────────────────
+
+
+class TestCreateNewPostmortem:
+    """Confluence first, GitLab second, and the title comes from the shared helper."""
+
+    def _run(self, confluence_link, gitlab_link):
+        from incidentbot.incident.actions import _create_new_postmortem
+
+        incident = _make_incident()
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_participants", return_value=[]),
+            patch("incidentbot.incident.actions.EventLogHandler.read", return_value=[]),
+            patch("incidentbot.incident.actions.build_postmortem_title", return_value="A title") as title,
+            patch("incidentbot.incident.actions._create_confluence_postmortem", return_value=confluence_link) as confluence,
+            patch("incidentbot.incident.actions._create_gitlab_postmortem", return_value=gitlab_link) as gitlab,
+        ):
+            link = _create_new_postmortem(incident)
+        return link, title, confluence, gitlab
+
+    def test_confluence_wins_when_it_returns_a_link(self):
+        link, title, _confluence, gitlab = self._run("https://confluence.example/pm", None)
+        assert link == "https://confluence.example/pm"
+        title.assert_called_once()
+        gitlab.assert_not_called()
+
+    def test_falls_through_to_gitlab(self):
+        link, _title, confluence, _gitlab = self._run(None, "https://gitlab.example/-/issues/1")
+        assert link == "https://gitlab.example/-/issues/1"
+        confluence.assert_called_once()
+
+    def test_returns_nothing_when_neither_produces_one(self):
+        link, _title, _confluence, _gitlab = self._run(None, None)
+        assert link is None

@@ -1,5 +1,10 @@
 from html import escape
 from incidentbot.configuration.settings import settings
+from incidentbot.incident.status import (
+    apply_status_change,
+    final_statuses,
+    first_final_status,
+)
 from incidentbot.logging import logger
 from incidentbot.matrix.messages import MatrixMessages
 from incidentbot.models.database import (
@@ -7,6 +12,7 @@ from incidentbot.models.database import (
     IncidentRecord,
     engine,
 )
+from incidentbot.models.incident import IncidentDatabaseInterface
 from incidentbot.platform import get_adapter
 from sqlmodel import Session, select
 
@@ -32,9 +38,11 @@ async def handle_help(room_id: str, client, digest_room_id: str = "") -> None:
 
 async def handle_status(room_id: str, client) -> None:
     with Session(engine) as session:
+        # From config, not a hardcoded pair: an install with its own final
+        # status was listing closed incidents as open.
         incidents = session.exec(
             select(IncidentRecord).where(
-                ~IncidentRecord.status.in_(["resolved", "archived"])
+                ~IncidentRecord.status.in_(sorted(final_statuses()) or ["resolved"])
             )
         ).all()
 
@@ -205,24 +213,17 @@ async def handle_resolve(room_id: str, args: list[str], client) -> None:
         await client.send_text_async(room_id, f"Invalid incident ID: {args[0]}")
         return
 
-    with Session(engine) as session:
-        record = session.get(IncidentRecord, incident_id)
-        if not record:
-            await client.send_text_async(room_id, f"Incident {incident_id} not found.")
-            return
-        final_status = next(
-            (
-                s
-                for s, cfg in __import__(
-                    "incidentbot.configuration.settings", fromlist=["settings"]
-                ).settings.statuses.items()
-                if cfg.final
-            ),
-            "resolved",
-        )
-        record.status = final_status
-        session.add(record)
-        session.commit()
+    record = IncidentDatabaseInterface.get_one(id=incident_id)
+    if not record:
+        await client.send_text_async(room_id, f"Incident {incident_id} not found.")
+        return
+
+    final_status = first_final_status()
+
+    # Not a plain status write: this also cancels the reminder jobs, syncs the
+    # ticket and runs the on_final_status automations. Writing record.status
+    # here instead left the reminders firing for a resolved incident.
+    record, postmortem_link = apply_status_change(record, final_status)
 
     lead_participant = None
     with Session(engine) as session:
@@ -241,3 +242,6 @@ async def handle_resolve(room_id: str, args: list[str], client) -> None:
     get_adapter().set_room_topic(room_id=record.channel_id, topic=topic)
 
     await client.send_text_async(room_id, f"{record.slug} marked as {final_status}.")
+
+    if postmortem_link:
+        await client.send_text_async(room_id, f"Postmortem: {postmortem_link}")
