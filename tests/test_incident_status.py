@@ -297,6 +297,22 @@ class TestPostmortem:
         with patch.object(_status, "settings", settings):
             assert _status._postmortem_classes() == [confluence, gitlab]
 
+    def test_only_confluence(self):
+        confluence = MagicMock(name="ConfluencePostmortem")
+        _stub_module("incidentbot.confluence.postmortem", "IncidentPostmortem", confluence)
+
+        settings = _make_settings(integrations=_integrations(confluence_postmortem=True))
+        with patch.object(_status, "settings", settings):
+            assert _status._postmortem_classes() == [confluence]
+
+    def test_only_gitlab(self):
+        gitlab = MagicMock(name="GitLabPostmortem")
+        _stub_module("incidentbot.gitlab.postmortem", "IncidentPostmortem", gitlab)
+
+        settings = _make_settings(integrations=_integrations(gitlab_postmortem=True))
+        with patch.object(_status, "settings", settings):
+            assert _status._postmortem_classes() == [gitlab]
+
     def test_skips_creation_when_one_already_exists(self):
         with (
             patch.object(_status, "IncidentDatabaseInterface") as db,

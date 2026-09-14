@@ -186,6 +186,114 @@ class TestSetStatus:
         mock_apply.assert_not_called()
         mock_client.chat_postMessage.assert_not_called()
 
+    def test_announces_the_postmortem_when_one_was_created(self):
+        incident = _make_incident()
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch(
+                "incidentbot.incident.actions.apply_status_change",
+                return_value=(incident, "https://confluence.example/postmortem"),
+            ),
+            patch("incidentbot.incident.actions.is_final", return_value=False),
+            patch("incidentbot.incident.actions._send_postmortem_message") as mock_send,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
+            patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
+        ):
+            asyncio.run(set_status("C123", "identified", "api"))
+
+        mock_send.assert_called_once_with(
+            incident.channel_id, "https://confluence.example/postmortem"
+        )
+
+    def test_a_human_asking_for_the_current_status_gets_told_so(self):
+        incident = _make_incident(status="investigating")
+        user = _make_user()
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "investigating", user))
+
+        mock_client.chat_postEphemeral.assert_called_once()
+        mock_apply.assert_not_called()
+
+    def test_a_failing_ephemeral_still_stops_at_the_unchanged_status(self):
+        """The notice is best effort; the no-op is not."""
+        from slack_sdk.errors import SlackApiError
+
+        incident = _make_incident(status="investigating")
+        user = _make_user()
+        mock_client = MagicMock()
+        mock_client.chat_postEphemeral.side_effect = SlackApiError("nope", response=None)
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change") as mock_apply,
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+        ):
+            asyncio.run(set_status("C123", "investigating", user))
+
+        mock_apply.assert_not_called()
+
+    def test_slack_being_down_does_not_undo_the_status_change(self):
+        """Every Slack call in this path is best effort.
+
+        The status, the ticket sync and the reminder cancellation already
+        happened in apply_status_change; a failing chat_update must not take the
+        rest of the function down with it.
+        """
+        from slack_sdk.errors import SlackApiError
+
+        incident = _make_incident()
+        mock_client = MagicMock()
+        for method in (
+            "chat_update",
+            "conversations_setTopic",
+            "chat_postMessage",
+        ):
+            getattr(mock_client, method).side_effect = SlackApiError("slack down", response=None)
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=True),
+            patch("incidentbot.incident.actions.BlockBuilder.resolution_message", return_value={"channel": "C123"}),
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
+            patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
+        ):
+            asyncio.run(set_status("C123", "resolved", "api"))
+
+        mock_apply.assert_called_once_with(incident, "resolved")
+        # Reached the last of the four: the resolution message.
+        assert mock_client.chat_postMessage.call_count == 2
+
+    def test_a_topic_with_a_third_segment_keeps_it(self):
+        incident = _make_incident()
+        mock_client = MagicMock()
+
+        with (
+            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)),
+            patch("incidentbot.incident.actions.is_final", return_value=False),
+            patch("incidentbot.incident.actions.slack_web_client", mock_client),
+            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
+            patch(
+                "incidentbot.incident.actions._get_channel_topic",
+                return_value=["Severity: SEV2", "Status: Investigating", "Commander: Ada"],
+            ),
+        ):
+            asyncio.run(set_status("C123", "identified", "api"))
+
+        topic = mock_client.conversations_setTopic.call_args[1]["topic"]
+        assert topic == "Severity: SEV2 | Status: Identified | Commander: Ada"
+
     def test_posts_the_resolution_message_on_a_final_status(self):
         incident = _make_incident()
         mock_client = MagicMock()

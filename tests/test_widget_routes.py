@@ -233,6 +233,10 @@ class TestWidgetUpdateIncidentRoom(unittest.TestCase):
         resp = self._post({"action": "set_status", "status": "identified"})
         self.assertEqual(resp.status_code, 200)
 
+    def test_set_status_without_a_status_returns_400(self):
+        resp = self._post({"action": "set_status"})
+        self.assertEqual(resp.status_code, 400)
+
     def test_set_status_invalid_value_returns_400(self):
         resp = self._post({"action": "set_status", "status": "bogus"})
         self.assertEqual(resp.status_code, 400)
