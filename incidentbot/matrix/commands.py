@@ -1,5 +1,6 @@
 from html import escape
 from incidentbot.configuration.settings import settings
+from incidentbot.incident.status import apply_status_change, first_final_status
 from incidentbot.logging import logger
 from incidentbot.matrix.messages import MatrixMessages
 from incidentbot.models.database import (
@@ -7,6 +8,7 @@ from incidentbot.models.database import (
     IncidentRecord,
     engine,
 )
+from incidentbot.models.incident import IncidentDatabaseInterface
 from incidentbot.platform import get_adapter
 from sqlmodel import Session, select
 
@@ -205,24 +207,17 @@ async def handle_resolve(room_id: str, args: list[str], client) -> None:
         await client.send_text_async(room_id, f"Invalid incident ID: {args[0]}")
         return
 
-    with Session(engine) as session:
-        record = session.get(IncidentRecord, incident_id)
-        if not record:
-            await client.send_text_async(room_id, f"Incident {incident_id} not found.")
-            return
-        final_status = next(
-            (
-                s
-                for s, cfg in __import__(
-                    "incidentbot.configuration.settings", fromlist=["settings"]
-                ).settings.statuses.items()
-                if cfg.final
-            ),
-            "resolved",
-        )
-        record.status = final_status
-        session.add(record)
-        session.commit()
+    record = IncidentDatabaseInterface.get_one(id=incident_id)
+    if not record:
+        await client.send_text_async(room_id, f"Incident {incident_id} not found.")
+        return
+
+    final_status = first_final_status()
+
+    # Not a plain status write: this also cancels the reminder jobs, syncs the
+    # ticket and runs the on_final_status automations. Writing record.status
+    # here instead left the reminders firing for a resolved incident.
+    record, _ = apply_status_change(record, final_status)
 
     lead_participant = None
     with Session(engine) as session:

@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from incidentbot.configuration.settings import settings
 from incidentbot.incident.core import Incident, IncidentRequestParameters
 from incidentbot.incident.event import EventLogHandler
+from incidentbot.incident.status import apply_status_change, first_final_status
 from incidentbot.models.database import IncidentParticipant, IncidentRecord, engine
 from incidentbot.models.response import SuccessResponse
 from incidentbot.platform import get_adapter
@@ -260,10 +261,7 @@ async def widget_update_incident_room(
             case "set_status" | "resolve":
                 target_status = body.status
                 if body.action == "resolve":
-                    target_status = next(
-                        (name for name, cfg in settings.statuses.items() if cfg.final),
-                        "resolved",
-                    )
+                    target_status = first_final_status()
                 if not target_status:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -274,21 +272,16 @@ async def widget_update_incident_room(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Invalid status '{target_status}'",
                     )
-                incident.status = target_status
-                session.add(incident)
-                session.commit()
+                # Writes the status, cancels the reminder jobs on a final
+                # status, syncs the ticket and writes the event log. A plain
+                # `incident.status = ...` here left the reminders running.
+                apply_status_change(incident, target_status, user=body.user)
+                session.refresh(incident)
 
                 _update_room_topic(adapter, incident)
                 adapter.send_text(
                     room_id,
                     f"Incident status updated to {target_status.title()}.",
-                )
-                EventLogHandler.create(
-                    event=f"The incident status was changed to {target_status.title()}",
-                    incident_id=incident.id,
-                    incident_slug=incident.slug,
-                    source="system",
-                    user=body.user,
                 )
                 return SuccessResponse(
                     result="success",

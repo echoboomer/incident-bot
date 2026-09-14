@@ -135,26 +135,27 @@ class TestSetSeverity:
 
 
 class TestSetStatus:
-    def test_updates_db_and_posts_messages(self):
+    def test_delegates_the_status_change_and_posts_messages(self):
+        """Slack owns the messages; the rest goes through apply_status_change.
+
+        That shared function is what cancels the reminder jobs, so every
+        platform gets the same behaviour. See tests/test_incident_status.py.
+        """
         incident = _make_incident()
         mock_client = MagicMock()
 
         with (
             patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col") as mock_update,
-            patch("incidentbot.incident.actions.EventLogHandler.create") as mock_event,
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=False),
             patch("incidentbot.incident.actions.slack_web_client", mock_client),
             patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations"),
-            patch("incidentbot.incident.actions.cancel_reminder_jobs"),
             patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
         ):
             asyncio.run(set_status("C123", "identified", "api"))
 
-        mock_update.assert_called_once_with(
-            channel_id="C123", col_name="status", value="identified"
-        )
-        mock_event.assert_called_once()
+        mock_apply.assert_called_once_with(incident, "identified")
+        mock_client.chat_postMessage.assert_called()
 
     def test_early_return_when_status_unchanged_for_human(self):
         incident = _make_incident(status="investigating")
@@ -170,49 +171,23 @@ class TestSetStatus:
 
         mock_update.assert_not_called()
 
-    def test_fires_automation_on_status_change(self):
+    def test_posts_the_resolution_message_on_a_final_status(self):
         incident = _make_incident()
         mock_client = MagicMock()
 
         with (
             patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_postmortem", return_value=MagicMock()),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_pagerduty_incident_records", return_value=[]),
-            patch("incidentbot.incident.actions.EventLogHandler.create"),
+            patch("incidentbot.incident.actions.apply_status_change", return_value=(incident, None)) as mock_apply,
+            patch("incidentbot.incident.actions.is_final", return_value=True),
             patch("incidentbot.incident.actions.slack_web_client", mock_client),
             patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations") as mock_auto,
-            patch("incidentbot.incident.actions.cancel_reminder_jobs"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one") as mock_get,
-            patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
-        ):
-            mock_get.return_value = incident
-            asyncio.run(set_status("C123", "resolved", "api"))
-
-        mock_auto.assert_called()
-        triggered = [call[0][0] for call in mock_auto.call_args_list]
-        assert "on_status_change" in triggered
-
-    def test_cancels_reminders_on_final_status(self):
-        incident = _make_incident()
-        mock_client = MagicMock()
-
-        with (
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_one", return_value=incident),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.update_col"),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.get_postmortem", return_value=MagicMock()),
-            patch("incidentbot.incident.actions.IncidentDatabaseInterface.list_pagerduty_incident_records", return_value=[]),
-            patch("incidentbot.incident.actions.EventLogHandler.create"),
-            patch("incidentbot.incident.actions.slack_web_client", mock_client),
-            patch("incidentbot.incident.actions.get_digest_channel_id", return_value="C-digest"),
-            patch("incidentbot.incident.actions.run_automations"),
-            patch("incidentbot.incident.actions.cancel_reminder_jobs") as mock_cancel,
+            patch("incidentbot.incident.actions.BlockBuilder.resolution_message", return_value={"channel": "C123"}) as mock_resolution,
             patch("incidentbot.incident.actions._get_channel_topic", return_value=["Severity: SEV2", "Status: Investigating"]),
         ):
             asyncio.run(set_status("C123", "resolved", "api"))
 
-        mock_cancel.assert_called_once_with(incident.slug)
+        mock_apply.assert_called_once_with(incident, "resolved")
+        mock_resolution.assert_called_once()
 
     def test_posts_error_when_incident_not_found(self):
         mock_client = MagicMock()
